@@ -4,6 +4,8 @@ An offline-first digital songbook built on Rust, SQLite and Tauri 2. Use it to o
 
 ## Run on Windows
 
+Double-click [Run-SongBookMuse.bat](Run-SongBookMuse.bat). It opens an existing build or builds the app on first launch.
+
 Use current stable Rust with MSVC, Node.js 22.13 or newer, and WebView2. Install any remaining Windows dependencies from the [Tauri setup guide](https://v2.tauri.app/start/prerequisites/).
 
 ```powershell

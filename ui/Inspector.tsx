@@ -13,6 +13,8 @@ interface InspectorProps {
   changePitch: (property: "transpose" | "capo", value: number) => void;
   settings: Settings;
   changeSettings: (settings: Settings) => void;
+  /** Scale chosen by fit-to-screen, or null in scroll layout. */
+  fitScale: number | null;
   folders: Folder[];
   toggleFolder: (id: string) => void;
   toggleLock: () => void;
@@ -72,7 +74,10 @@ export function Inspector(props: InspectorProps) {
     </section>
     <section className="rack">
       <h3>View</h3>
-      <Stepper label="Zoom" value={settings.scale} display={settings.scale + "%"} min={65} max={200} step={5}
+      <label className="check"><input type="checkbox" checked={settings.layout === "fit"}
+        onChange={e => props.changeSettings({ ...settings, layout: e.target.checked ? "fit" : "scroll" })}/>Fit song to screen</label>
+      <Stepper label="Zoom" value={settings.scale} min={65} max={200} step={5} disabled={settings.layout === "fit" && !song.document}
+        display={settings.layout === "fit" && !song.document ? (props.fitScale ? "Auto " + Math.round(props.fitScale * 100) + "%" : "Auto") : settings.scale + "%"}
         onChange={scale => props.changeSettings({ ...settings, scale })}/>
       {!song.document && <Stepper label="Scroll time" value={autoScroll.seconds} display={minutes} min={15} max={1800} step={15}
         onChange={value => props.autoScroll.adjust(value / autoScroll.seconds)}/>}

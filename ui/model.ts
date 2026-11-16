@@ -73,6 +73,7 @@ export interface Settings {
   notation: "standard" | "nashville";
   autoscroll_delay: number;
   key_spelling: boolean;
+  layout: "fit" | "scroll";
 }
 
 export interface Preview {
@@ -114,7 +115,7 @@ export function blankSong(): Song {
 
 export const defaultSettings: Settings = {
   theme: "dark", scale: 100, columns: false, flats: false, compact_sidebar: false,
-  notation: "standard", autoscroll_delay: 10, key_spelling: true,
+  notation: "standard", autoscroll_delay: 10, key_spelling: true, layout: "fit",
 };
 
 export const nilEntry = (song_id: string): SetEntry => ({ id: nil, song_id, transpose: null, capo: null, note: null });

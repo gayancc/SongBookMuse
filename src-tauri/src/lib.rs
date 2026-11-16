@@ -1,8 +1,8 @@
 mod midi;
 
 use muse_core::{
-    Backup, BackupPreview, Folder, Library, Line, MidiBinding, RenderOptions, RestoreMode,
-    RestoreReport, Setlist, Settings, Song, SongSummary,
+    Backup, BackupPreview, FitLayout, FitRequest, Folder, Library, Line, MidiBinding,
+    RenderOptions, RestoreMode, RestoreReport, Setlist, Settings, Song, SongSummary,
 };
 use serde::{Deserialize, Serialize};
 use std::io::Write;
@@ -69,6 +69,37 @@ fn render(source: String, options: RenderOptions) -> Command<Vec<Line>> {
         return Err("Section order or key exceeds the supported length".into());
     }
     Ok(muse_core::render_with(&source, &options))
+}
+
+#[tauri::command]
+fn fit_layout(request: FitRequest) -> Command<FitLayout> {
+    let lines: usize = request.blocks.iter().map(|b| b.lines.len()).sum();
+    let numbers = [
+        request.width,
+        request.height,
+        request.header,
+        request.gap,
+        request.min_scale,
+        request.max_scale,
+        request.comfort_scale,
+        request.min_column_width,
+    ];
+    let measured = request.blocks.iter().flat_map(|b| {
+        [b.overhead, b.indent]
+            .into_iter()
+            .chain(b.lines.iter().flat_map(|l| [l.width, l.height]))
+    });
+    if request.blocks.len() > 5_000
+        || lines > 50_000
+        || request.max_columns > 8
+        || numbers
+            .into_iter()
+            .chain(measured)
+            .any(|v| !v.is_finite() || v < 0.0)
+    {
+        return Err("Invalid chart measurements".into());
+    }
+    Ok(muse_core::fit_layout(&request))
 }
 
 #[tauri::command]
@@ -304,6 +335,7 @@ fn run_app() {
             delete_set,
             render,
             section_labels,
+            fit_layout,
             transpose,
             folders,
             save_folder,

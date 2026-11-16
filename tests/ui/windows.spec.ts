@@ -73,7 +73,7 @@ test("creates, transposes, setlists and reopens a song across three viewport siz
   await page.getByRole("button", { name: "Song details" }).click();
   await page.getByRole("button", { name: "Transpose up" }).click();
   await expect(lcd()).toContainText("Bbm");
-  await expect(page.locator(".sheet .chart-part strong").first()).toHaveText("Bbm");
+  await expect(page.locator(".fit-page .chart-part strong").first()).toHaveText("Bbm");
   if (process.env.MUSE_UI_SCREENSHOTS) await page.screenshot({ path: "test-results/desktop.png" });
   await page.getByRole("button", { name: "Close details" }).click();
   await page.getByRole("button", { name: "Setlists", exact: true }).click();
@@ -120,14 +120,14 @@ test("organizes folders, section order, Nashville numbers, note items and keyboa
 
   await details.getByRole("button", { name: "+ Chorus" }).click();
   await details.getByRole("button", { name: "+ Chorus" }).click();
-  await expect(page.locator(".sheet .chart-heading")).toHaveCount(2);
+  await expect(page.locator(".fit-page .chart-heading")).toHaveCount(2);
   await details.getByRole("checkbox", { name: "Nashville numbers" }).click();
   await expect(details.getByRole("checkbox", { name: "Nashville numbers" })).toBeChecked();
-  await expect(page.locator(".sheet .chart-part strong").first()).toHaveText("1m");
+  await expect(page.locator(".fit-page .chart-part strong").first()).toHaveText("1m");
   await details.getByRole("checkbox", { name: "Nashville numbers" }).click();
   await expect(details.getByRole("checkbox", { name: "Nashville numbers" })).not.toBeChecked();
   await details.getByRole("button", { name: "Reset" }).click();
-  await expect(page.locator(".sheet .chart-heading")).toHaveCount(1);
+  await expect(page.locator(".fit-page .chart-heading")).toHaveCount(1);
   await page.getByRole("button", { name: "Close details" }).click();
 
   await page.getByRole("button", { name: "Setlists", exact: true }).click();
@@ -147,6 +147,57 @@ test("organizes folders, section order, Nashville numbers, note items and keyboa
   await page.keyboard.press("Escape");
   await expect(page.getByRole("complementary", { name: "Library browser" })).toBeVisible();
   if (process.env.MUSE_UI_SCREENSHOTS) await page.screenshot({ path: "test-results/studio.png" });
+});
+
+test("fits a long song to the screen with columns, pages on a phone, and trailing chords on the chord row", async () => {
+  await page.setViewportSize({ width: 1360, height: 820 });
+  await page.getByRole("button", { name: "Songs", exact: true }).click();
+  const verse = (n: number) => "{start_of_verse: Verse " + n + "}\n" +
+    Array.from({ length: 4 }, (_, i) => "[G]Line " + (i + 1) + " of verse " + n + " walks [Em]along the [C]road [D]").join("\n") + "\n{end_of_verse}";
+  const chorus = "{start_of_chorus}\n" + Array.from({ length: 4 }, () => "[C]Sing it [G]loud and [D]clear [Em]").join("\n") + "\n{end_of_chorus}";
+  const source = ["[Em]Intro [Bm]riff [Am]  [Em] [Am] [D]", verse(1), chorus, verse(2), chorus, verse(3), chorus, verse(4), chorus].join("\n");
+  await page.getByRole("button", { name: "New song" }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Long medley");
+  await page.getByLabel("Source", { exact: true }).fill(source);
+  await page.getByRole("button", { name: "Save song" }).click();
+  await expect(page.getByRole("heading", { name: "Long medley", exact: true })).toBeVisible();
+
+  const sheet = page.locator(".sheet-scroll");
+  await expect(sheet).toHaveAttribute("data-fit", "true");
+  await expect(page.locator(".fit-page")).toHaveCount(1);
+  await expect(page.locator(".fit-page .fit-column")).not.toHaveCount(1);
+  // Everything is visible without scrolling and the text was not shrunk below the readable floor.
+  await expect.poll(() => sheet.evaluate(e => e.scrollHeight - e.clientHeight)).toBeLessThanOrEqual(1);
+  const columns = page.locator(".fit-page .fit-column");
+  for (let i = 0; i < await columns.count(); i++) {
+    await expect.poll(() => columns.nth(i).evaluate(c => c.scrollHeight <= (c.parentElement?.clientHeight ?? 0) + 1)).toBe(true);
+  }
+  const fontSize = await page.locator(".fit-columns").evaluate(e => parseFloat(getComputedStyle(e).fontSize));
+  expect(fontSize).toBeGreaterThanOrEqual(14);
+  await page.mouse.move(5, 5);
+  await expect(page.locator("footer.hintbar")).toContainText("1 screen");
+  // No row wrapped: every chord sits on the same row as the first chord of its line.
+  const wrappedRows = await page.locator(".fit-page .chart-line").evaluateAll(lines => lines.filter(line => {
+    const tops = Array.from(line.querySelectorAll("strong")).map(s => Math.round(s.getBoundingClientRect().top));
+    return new Set(tops).size > 1;
+  }).length);
+  expect(wrappedRows).toBe(0);
+
+  // Trailing chords sit on the chord row, level with the line's other chords.
+  const intro = page.locator(".fit-page .chart-line").first();
+  const tops = await intro.locator("strong").evaluateAll(els => els.map(e => Math.round(e.getBoundingClientRect().top)));
+  expect(new Set(tops).size).toBe(1);
+  if (process.env.MUSE_UI_SCREENSHOTS) await page.screenshot({ path: "test-results/fit-desktop.png" });
+
+  await page.setViewportSize({ width: 390, height: 730 });
+  await expect.poll(() => page.locator(".fit-page").count()).toBeGreaterThan(1);
+  const height = await sheet.evaluate(e => e.clientHeight);
+  const pageHeights = await page.locator(".fit-page").evaluateAll(els => els.map(e => Math.round(e.getBoundingClientRect().height)));
+  expect(pageHeights.every(h => Math.abs(h - height) <= 1)).toBe(true);
+  await page.keyboard.press("PageDown");
+  await expect.poll(() => sheet.evaluate(e => Math.round(e.scrollTop))).toBe(height);
+  if (process.env.MUSE_UI_SCREENSHOTS) await page.screenshot({ path: "test-results/fit-phone.png" });
+  await page.setViewportSize({ width: 1360, height: 820 });
 });
 
 function pdfFixture() {

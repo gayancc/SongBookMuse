@@ -1,6 +1,7 @@
 mod audio;
 mod backup;
 mod chart;
+mod layout;
 mod midi;
 mod music;
 mod store;
@@ -8,6 +9,7 @@ mod store;
 pub use audio::*;
 pub use backup::*;
 pub use chart::*;
+pub use layout::*;
 pub use midi::*;
 pub use music::*;
 pub use store::*;
@@ -134,6 +136,8 @@ pub struct Settings {
     pub autoscroll_delay: u16,
     /// Spell transposed chords from the target key when the song key is known.
     pub key_spelling: bool,
+    /// `fit` sizes and columns the chart to the screen; `scroll` uses the fixed zoom.
+    pub layout: String,
 }
 
 impl Default for Settings {
@@ -147,6 +151,7 @@ impl Default for Settings {
             notation: "standard".into(),
             autoscroll_delay: 10,
             key_spelling: true,
+            layout: "fit".into(),
         }
     }
 }

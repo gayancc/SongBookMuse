@@ -3,12 +3,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
-  BookOpen, ChevronLeft, Columns2, Download, Ellipsis, Eye, FolderUp, ListMusic, Minimize, Music2, Pencil, Play,
+  BookOpen, ChevronLeft, Columns2, Download, Maximize2, Ellipsis, Eye, FolderUp, ListMusic, Minimize, Music2, Pencil, Play,
   Printer, Radio, ScrollText, Settings2, SkipBack, SkipForward, SlidersHorizontal, Square, Star, StickyNote, Trash2, X
 } from "lucide-react";
 import { BackingTrack } from "./BackingTrack";
 import { Browser, type LibraryFilter } from "./Browser";
-import { Chart } from "./Chart";
+import { Chart, FitChart, type FitLayout } from "./Chart";
 import { decode, encode, exportFile, safeName } from "./commands";
 import { DialogError, IconButton, Modal } from "./components";
 import { DocumentView, type InkTool } from "./DocumentView";
@@ -79,6 +79,7 @@ export function App() {
   const [width, setWidth] = useState(0.004);
   const [redo, setRedo] = useState<Stroke[]>([]);
   const [sectionLabels, setSectionLabels] = useState<string[]>([]);
+  const [fitInfo, setFitInfo] = useState<FitLayout | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [replace, setReplace] = useState(false);
   const [restoring, setRestoring] = useState(false);
@@ -209,7 +210,8 @@ export function App() {
       return;
     }
     const view = scroll.current;
-    if (view) view.scrollBy({ top: step * view.clientHeight * .9 });
+    // Fit pages are exactly one screen tall, so a page turn moves a whole page.
+    if (view) view.scrollBy({ top: step * view.clientHeight * (view.dataset.fit === "true" ? 1 : .9) });
   }, [song?.document?.mime, pageCount]);
 
   useEffect(() => {
@@ -382,6 +384,17 @@ export function App() {
   const canDraw = Boolean(song?.document) && !locked;
   const lcdTitle = noteItem ? "Note" : song?.title ?? (currentSet ? currentSet.title : "No song loaded");
   const position = index >= 0 && currentSet ? pad(index + 1) + "/" + pad(currentSet.entries.length) : "--/--";
+  const fitMode = settings.layout === "fit" && Boolean(song) && !song?.document && !noteItem;
+  const sheetHeader = useMemo(() => song ? <header className="sheet-header">
+    <h2>{song.number > 0 && <span className="song-number">{song.number}</span>}{song.title}</h2>
+    {(song.artist || song.subtitle) && <p>{[song.artist, song.subtitle].filter(Boolean).join(" — ")}</p>}
+  </header> : null, [song?.number, song?.title, song?.artist, song?.subtitle, song]);
+  const sheetFooter = song && (song.copyright || song.notes) ? <>
+    {song.copyright && <p className="copyright">{song.copyright}</p>}
+    {song.notes && <aside className="song-notes"><h3>Notes</h3>{song.notes}</aside>}
+  </> : null;
+  const fitHint = fitMode && fitInfo ? "Fit to screen: " + fitInfo.columns + (fitInfo.columns === 1 ? " column" : " columns") + " · " +
+    Math.round(fitInfo.scale * 100) + "% · " + fitInfo.pages.length + (fitInfo.pages.length === 1 ? " screen" : " screens") : "";
   const renderOptions = song ? { shift: shift - capo, flats: settings.flats, key: song.key, nashville: settings.notation === "nashville",
     key_spelling: settings.key_spelling, section_order: song.section_order } : null;
 
@@ -453,8 +466,10 @@ export function App() {
           <span className="toolbar-spacer"/>
           {song && <>
             <IconButton label="Lyrics only" aria-pressed={lyricsOnly} disabled={Boolean(song.document)} onClick={() => setLyricsOnly(!lyricsOnly)}><Eye size={15}/></IconButton>
-            <IconButton label="Two columns" aria-pressed={settings.columns} disabled={Boolean(song.document)}
-              onClick={() => void action(() => changeSettings({ ...settings, columns: !settings.columns }))}><Columns2 size={15}/></IconButton>
+            <IconButton label="Fit song to screen" aria-pressed={settings.layout === "fit"} disabled={Boolean(song.document)}
+              onClick={() => void action(() => changeSettings({ ...settings, layout: settings.layout === "fit" ? "scroll" : "fit" }))}><Maximize2 size={15}/></IconButton>
+            {settings.layout === "scroll" && <IconButton label="Two columns" aria-pressed={settings.columns} disabled={Boolean(song.document)}
+              onClick={() => void action(() => changeSettings({ ...settings, columns: !settings.columns }))}><Columns2 size={15}/></IconButton>}
             {!perform && <>
               <IconButton label={song.favorite ? "Remove from favorites" : "Add to favorites"} aria-pressed={song.favorite}
                 onClick={() => void action(() => saveSong({ ...song, favorite: !song.favorite }, false))}><Star size={15}/></IconButton>
@@ -474,7 +489,7 @@ export function App() {
           {noteItem && !perform && <button type="button" onClick={() => setPrompt({ kind: "note", entry: noteItem })}><Pencil size={14}/>Edit note</button>}
           {perform && <button type="button" className="exit-perform" onClick={togglePerformance}><Minimize size={15}/>Exit</button>}
         </div>
-        <div className="sheet-scroll" ref={scroll} data-autoscroll={autoScroll.running} onTouchStart={e => {
+        <div className="sheet-scroll" ref={scroll} data-autoscroll={autoScroll.running} data-fit={fitMode} onTouchStart={e => {
           touch.current = e.touches.length === 1 ? [e.touches[0].clientX, e.touches[0].clientY] : null;
         }} onTouchEnd={e => {
           const start = touch.current; touch.current = null;
@@ -485,16 +500,15 @@ export function App() {
           {noteItem ? <article className="sheet note-sheet" style={{ "--zoom": settings.scale / 100 } as React.CSSProperties}>
             <header className="sheet-header"><StickyNote size={18}/><h2>Note</h2></header>
             <p className="note-text">{noteItem.note}</p>
+          </article> : song && renderOptions && fitMode ? <article className="sheet sheet-fit">
+            <FitChart key={song.id} source={song.source} options={renderOptions} lyricsOnly={lyricsOnly} viewport={scroll}
+              header={sheetHeader} footer={sheetFooter} onLayout={setFitInfo}/>
           </article> : song && renderOptions && <article className={"sheet" + (settings.columns ? " sheet-columns" : "")} style={{ "--zoom": settings.scale / 100 } as React.CSSProperties}>
-            <header className="sheet-header">
-              <h2>{song.number > 0 && <span className="song-number">{song.number}</span>}{song.title}</h2>
-              {(song.artist || song.subtitle) && <p>{[song.artist, song.subtitle].filter(Boolean).join(" — ")}</p>}
-            </header>
+            {sheetHeader}
             {song.document ? <DocumentView key={song.id} song={song} page={page} setPage={setPage} setPageCount={setPageCount}
               tool={canDraw ? tool : "none"} brush={brush} width={width} changeInk={ink => { setRedo([]); changeInk(ink); }} onError={report}/> :
               <Chart source={song.source} options={renderOptions} lyricsOnly={lyricsOnly}/>}
-            {song.copyright && <p className="copyright">{song.copyright}</p>}
-            {song.notes && <aside className="song-notes"><h3>Notes</h3>{song.notes}</aside>}
+            {sheetFooter}
           </article>}
         </div>
         {perform && <footer className="stage-bar">
@@ -516,7 +530,7 @@ export function App() {
 
     {song && inspector && !perform && <Inspector song={song} kind={lookup.get(song.id)?.kind ?? "Chord sheet"} shift={shift} capo={capo}
       inSet={Boolean(entry)} changePitch={(p, v) => void action(() => modifyPitch(p, v))} settings={settings}
-      changeSettings={next => void action(() => changeSettings(next))} folders={folders}
+      changeSettings={next => void action(() => changeSettings(next))} fitScale={fitMode ? fitInfo?.scale ?? null : null} folders={folders}
       toggleFolder={id => void action(() => saveSong({ ...song, folders: song.folders.includes(id) ? song.folders.filter(f => f !== id) : [...song.folders, id] }, false))}
       toggleLock={() => void action(() => saveSong({ ...song, locked: !song.locked }, false))} autoScroll={autoScroll}
       sectionLabels={sectionLabels} changeSectionOrder={order => void action(() => saveSong({ ...song, section_order: order }, false))}
@@ -526,7 +540,7 @@ export function App() {
       edit={() => setEditing(song)} close={() => setInspector(false)}/>}
 
     <footer className="hintbar" role={error ? "alert" : "status"} data-tone={error ? "error" : notice ? "notice" : "hint"}>
-      <span>{error || notice || hint || (song ? "Space or Page Down turns the page · A toggles auto-scroll" : "Ready")}</span>
+      <span>{error || notice || hint || fitHint || (song ? "Space or Page Down turns the page · A toggles auto-scroll" : "Ready")}</span>
       {(error || notice) && <IconButton label="Dismiss message" onClick={() => { setNotice(""); setError(""); }}><X size={13}/></IconButton>}
     </footer>
 

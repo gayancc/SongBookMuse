@@ -467,6 +467,7 @@ pub(crate) fn validate_settings(s: &Settings) -> Result<()> {
     if !matches!(s.theme.as_str(), "dark" | "light" | "contrast")
         || !(65..=200).contains(&s.scale)
         || !matches!(s.notation.as_str(), "standard" | "nashville")
+        || !matches!(s.layout.as_str(), "fit" | "scroll")
         || s.autoscroll_delay > 600
     {
         return Err(invalid("Invalid appearance settings"));
