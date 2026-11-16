@@ -1,0 +1,29 @@
+{
+  "name": "songbook-muse",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --strictPort",
+    "build": "tsc --noEmit && vite build",
+    "tauri": "tauri",
+    "test:ui": "playwright test"
+  },
+  "dependencies": {
+    "@fontsource-variable/dm-sans": "^5",
+    "@fontsource/dm-serif-text": "^5.3.0",
+    "@tauri-apps/api": "^2",
+    "lucide-react": "^0.468.0",
+    "pdfjs-dist": "^6.5.438",
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1",
+    "@tauri-apps/cli": "^2",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "typescript": "^5.9",
+    "vite": "^7"
+  }
+}

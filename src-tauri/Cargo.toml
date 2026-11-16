@@ -1,0 +1,25 @@
+[package]
+name = "songbook-muse"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "muse_shell"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+muse-core = { path = "../crates/muse-core" }
+tauri = { version = "2.12.6", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+tempfile = "3"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+midir = "0.11.1"

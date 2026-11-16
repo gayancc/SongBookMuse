@@ -1,0 +1,13 @@
+[workspace]
+members = ["crates/muse-core", "src-tauri"]
+default-members = ["crates/muse-core"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+rust-version = "1.90"
+
+[profile.release]
+lto = "thin"
+strip = "debuginfo"

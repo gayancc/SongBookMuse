@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "SongBookMuse",
+  "identifier": "com.songbookmuse.muse",
+  "version": "0.1.0",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{ "label": "main", "title": "SongBookMuse", "width": 1360, "height": 870, "minWidth": 340, "minHeight": 500, "dragDropEnabled": false }],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self'; worker-src 'self' blob:; connect-src ipc: http://ipc.localhost; media-src 'self' blob: data:"
+    }
+  },
+  "bundle": { "active": true, "targets": "all", "icon": ["icons/icon.png", "icons/icon.ico", "icons/icon.icns"] }
+}
