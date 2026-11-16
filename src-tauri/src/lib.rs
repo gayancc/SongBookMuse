@@ -1,8 +1,8 @@
 mod midi;
 
 use muse_core::{
-    Backup, BackupPreview, Library, Line, MidiBinding, RestoreMode, RestoreReport, Setlist,
-    Settings, Song, SongSummary,
+    Backup, BackupPreview, Folder, Library, Line, MidiBinding, RenderOptions, RestoreMode,
+    RestoreReport, Setlist, Settings, Song, SongSummary,
 };
 use serde::{Deserialize, Serialize};
 use std::io::Write;
@@ -61,16 +61,45 @@ async fn delete_set(state: State<'_, AppState>, id: String) -> Command<()> {
 }
 
 #[tauri::command]
-fn render(source: String, shift: i16, flats: bool) -> Command<Vec<Line>> {
+fn render(source: String, options: RenderOptions) -> Command<Vec<Line>> {
     if source.len() > muse_core::MAX_SOURCE {
         return Err("Song text exceeds 1 MiB".into());
     }
-    Ok(muse_core::render(&source, shift, flats))
+    if options.section_order.len() > 4096 || options.key.len() > 50 {
+        return Err("Section order or key exceeds the supported length".into());
+    }
+    Ok(muse_core::render_with(&source, &options))
 }
 
 #[tauri::command]
-fn transpose(chord: String, shift: i16, flats: bool) -> String {
-    muse_core::transpose(&chord, shift, flats)
+fn section_labels(source: String) -> Command<Vec<String>> {
+    if source.len() > muse_core::MAX_SOURCE {
+        return Err("Song text exceeds 1 MiB".into());
+    }
+    Ok(muse_core::section_labels(&source))
+}
+
+#[tauri::command]
+fn transpose(chord: String, shift: i16, flats: bool, key_spelling: Option<bool>) -> String {
+    if chord.len() > 64 {
+        return chord;
+    }
+    muse_core::display_key(&chord, shift, flats, key_spelling.unwrap_or(true))
+}
+
+#[tauri::command]
+async fn folders(state: State<'_, AppState>) -> Command<Vec<Folder>> {
+    with_library(&state, |db| db.folders())
+}
+
+#[tauri::command]
+async fn save_folder(state: State<'_, AppState>, folder: Folder) -> Command<Folder> {
+    with_library(&state, |db| db.save_folder(folder))
+}
+
+#[tauri::command]
+async fn delete_folder(state: State<'_, AppState>, id: String) -> Command<()> {
+    with_library(&state, |db| db.delete_folder(&id))
 }
 
 #[derive(Deserialize)]
@@ -274,7 +303,11 @@ fn run_app() {
             save_set,
             delete_set,
             render,
+            section_labels,
             transpose,
+            folders,
+            save_folder,
+            delete_folder,
             import_files,
             settings,
             save_settings,

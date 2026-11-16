@@ -26,7 +26,7 @@ fn notation_preserves_quality_and_transposes_bass() {
         2,
         false,
     );
-    assert!(matches!(&lines[0], Line::Heading { text } if text == "Chorus"));
+    assert!(matches!(&lines[0], Line::Heading { text, .. } if text == "Chorus"));
     assert!(
         matches!(&lines[1], Line::Lyric { parts } if parts[0].chord.as_deref() == Some("Bm") && parts[2].chord.as_deref() == Some("spoken"))
     );
@@ -59,6 +59,7 @@ fn library_reopens_searches_and_keeps_repeated_ordered_entries() {
                     song_id,
                     transpose: None,
                     capo: None,
+                    note: None,
                 })
                 .collect(),
             ..Setlist::default()
@@ -91,6 +92,7 @@ fn own_backup_preserves_document_annotation_settings_and_rejects_invalid_replace
         color: "#aabbee".into(),
         width: 0.004,
         points: vec![[0.2, 0.3], [0.4, 0.8]],
+        highlight: false,
     });
     original.save_song(song.clone()).unwrap();
     let list = original
@@ -101,6 +103,7 @@ fn own_backup_preserves_document_annotation_settings_and_rejects_invalid_replace
                 song_id: song.id,
                 transpose: Some(-2),
                 capo: Some(1),
+                note: None,
             }],
             ..Setlist::default()
         })
@@ -152,6 +155,7 @@ fn restore_rolls_back_library_replacement_after_database_write_failure() {
         )
         .unwrap();
     let incoming = Backup {
+        folders: Vec::new(),
         songs: vec![chart("First", "[C]First"), chart("Reject", "[D]Second")],
         settings: None,
         sets: vec![],

@@ -53,7 +53,9 @@ export function Metronome({ tempo, beats, onError }: { tempo: number; beats: num
   }
 
   return <div className="metro" data-playing={playing}>
-    <IconButton label={playing ? "Stop metronome" : "Start metronome"} aria-pressed={playing} onClick={() => void toggle()}><AudioLines size={17}/></IconButton>
-    <span aria-hidden="true">{playing ? beat + " / " + meter : bpm + " BPM"}</span>
+    <IconButton label={playing ? "Stop metronome" : "Start metronome"} aria-pressed={playing} onClick={() => void toggle()}><AudioLines size={16}/></IconButton>
+    <span className="beat-leds" aria-hidden="true">
+      {Array.from({ length: meter }, (_, i) => <i key={i} data-on={playing && beat === i + 1} data-down={i === 0}/>)}
+    </span>
   </div>;
 }

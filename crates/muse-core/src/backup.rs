@@ -13,6 +13,8 @@ const SIGNATURE: &[u8] = b"SongBookMuse backup 1\n";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Backup {
     pub songs: Vec<Song>,
+    #[serde(default)]
+    pub folders: Vec<Folder>,
     pub sets: Vec<Setlist>,
     pub settings: Option<Settings>,
     #[serde(default)]
@@ -110,6 +112,16 @@ impl Backup {
                 return Err(invalid("Duplicate song identifier"));
             }
         }
+        let mut folders = HashSet::new();
+        for folder in &self.folders {
+            if folder.id.is_nil()
+                || !folders.insert(folder.id)
+                || folder.name.trim().is_empty()
+                || folder.name.len() > 256
+            {
+                return Err(invalid("Invalid or duplicate folder"));
+            }
+        }
         let mut sets = HashSet::new();
         let mut entries = HashSet::new();
         for set in &self.sets {
@@ -123,7 +135,9 @@ impl Backup {
                 return Err(invalid("Invalid or duplicate set"));
             }
             for entry in &set.entries {
-                if entry.id.is_nil() || !entries.insert(entry.id) || !songs.contains(&entry.song_id)
+                validate_entry(entry)?;
+                if !entries.insert(entry.id)
+                    || (!entry.is_note() && !songs.contains(&entry.song_id))
                 {
                     return Err(invalid("Invalid set entry or missing song"));
                 }
@@ -441,6 +455,7 @@ fn read_sbp(bytes: &[u8], warnings: &mut Vec<String>) -> Result<Backup> {
                 song_id,
                 transpose: Some(item.shift),
                 capo: (item.capo >= 0).then_some(item.capo),
+                note: None,
             });
         }
         sets.push(Setlist {
@@ -465,6 +480,7 @@ fn read_sbp(bytes: &[u8], warnings: &mut Vec<String>) -> Result<Backup> {
     }
     Ok(Backup {
         songs,
+        folders: Vec::new(),
         sets,
         settings,
         migration_sources: vec![MigrationSource {

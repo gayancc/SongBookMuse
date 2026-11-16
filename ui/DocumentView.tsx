@@ -5,9 +5,27 @@ import { decode } from "./commands";
 import type { Song, Stroke } from "./model";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
-export function DocumentView({ song, page, setPage, setPageCount, draw, brush, changeInk, onError }:
-  { song: Song; page: number; setPage: (n: number) => void; setPageCount: (n: number) => void; draw: boolean; brush: string;
-    changeInk: (ink: Stroke[]) => void; onError: (message: string) => void }) {
+export type InkTool = "none" | "pen" | "highlight" | "erase";
+
+interface DocumentViewProps {
+  song: Song;
+  page: number;
+  setPage: (n: number) => void;
+  setPageCount: (n: number) => void;
+  tool: InkTool;
+  brush: string;
+  width: number;
+  changeInk: (ink: Stroke[]) => void;
+  onError: (message: string) => void;
+}
+
+/** Distance from a normalized point to the nearest vertex of a stroke on the same page. */
+function touches(stroke: Stroke, [x, y]: [number, number], radius: number): boolean {
+  return stroke.points.some(([px, py]) => Math.hypot(px - x, py - y) <= radius + stroke.width);
+}
+
+export function DocumentView({ song, page, setPage, setPageCount, tool, brush, width, changeInk, onError }: DocumentViewProps) {
+  const draw = tool !== "none";
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [image, setImage] = useState("");
   const [pending, setPending] = useState<Stroke | null>(null);
@@ -71,16 +89,29 @@ export function DocumentView({ song, page, setPage, setPageCount, draw, brush, c
     <div className="document">
       {song.document?.mime === "application/pdf" ? <canvas ref={canvas} aria-label={"PDF page " + page}/> :
         image && <img src={image} alt={song.title} onError={() => onError("This image could not be decoded")}/>}
-      <svg className={draw ? "ink enabled" : "ink"} aria-hidden="true" viewBox="0 0 1000 1000" preserveAspectRatio="none"
+      <svg className={draw ? "ink enabled" : "ink"} data-tool={tool} aria-hidden="true" viewBox="0 0 1000 1000" preserveAspectRatio="none"
         onPointerDown={event => {
           if (!event.isPrimary || event.button !== 0) return;
           event.currentTarget.setPointerCapture(event.pointerId);
-          active.current = { page, width: 0.004, color: brush, points: [point(event)] };
+          if (tool === "erase") {
+            const at = point(event);
+            const kept = song.ink.filter(stroke => stroke.page !== page || !touches(stroke, at, 0.015));
+            if (kept.length !== song.ink.length) changeInk(kept);
+            return;
+          }
+          const highlight = tool === "highlight";
+          active.current = { page, width: highlight ? Math.min(0.05, width * 4) : width, color: brush, points: [point(event)], highlight };
           setPending(active.current);
         }}
         onPointerMove={event => {
-          if (!event.isPrimary || !active.current) return;
-          if (active.current.points.length >= 4000) return;
+          if (!event.isPrimary) return;
+          if (tool === "erase" && event.buttons === 1) {
+            const at = point(event);
+            const kept = song.ink.filter(stroke => stroke.page !== page || !touches(stroke, at, 0.015));
+            if (kept.length !== song.ink.length) changeInk(kept);
+            return;
+          }
+          if (!active.current || active.current.points.length >= 4000) return;
           active.current.points.push(point(event));
           setPending({ ...active.current });
         }}
@@ -93,9 +124,11 @@ export function DocumentView({ song, page, setPage, setPageCount, draw, brush, c
         }}
         onPointerCancel={() => { active.current = null; setPending(null); }}>
         {strokes.map((stroke, i) => stroke.points.length === 1
-          ? <circle key={i} cx={stroke.points[0][0]*1000} cy={stroke.points[0][1]*1000} r={stroke.width*500} fill={stroke.color}/>
+          ? <circle key={i} cx={stroke.points[0][0]*1000} cy={stroke.points[0][1]*1000} r={stroke.width*500} fill={stroke.color}
+              opacity={stroke.highlight ? 0.35 : 1}/>
           : <polyline key={i} points={stroke.points.map(([x,y]) => [x*1000,y*1000].join(",")).join(" ")}
-              stroke={stroke.color} strokeWidth={stroke.width*1000} strokeLinecap="round" strokeLinejoin="round" fill="none"/>)}
+              stroke={stroke.color} strokeWidth={stroke.width*1000} strokeLinecap={stroke.highlight ? "square" : "round"}
+              strokeLinejoin="round" fill="none" opacity={stroke.highlight ? 0.35 : 1}/>)}
       </svg>
     </div>
   </>;

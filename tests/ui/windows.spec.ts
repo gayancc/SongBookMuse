@@ -32,8 +32,11 @@ test.beforeAll(async () => {
   }, { timeout: 25000 }).toBe(true);
   browser = await chromium.connectOverCDP(endpoint);
   page = browser.contexts()[0].pages().find(p => p.url().includes("tauri.localhost"))!;
-  await expect(page.getByRole("heading", { name: "Library", exact: true })).toBeVisible();
+  await expect(page.getByRole("complementary", { name: "Library browser" })).toBeVisible();
 });
+
+const hint = () => page.locator("footer.hintbar");
+const lcd = () => page.getByRole("status", { name: "Song display" });
 test.afterAll(async () => {
   if (page && child?.pid && child.exitCode === null) {
     const closed = new Promise(resolve => child.once("close", resolve));
@@ -69,7 +72,8 @@ test("creates, transposes, setlists and reopens a song across three viewport siz
   await expect(page.getByRole("heading", { name: "Soundcheck", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Song details" }).click();
   await page.getByRole("button", { name: "Transpose up" }).click();
-  await expect(page.getByText("Key A#m", { exact: true })).toBeVisible();
+  await expect(lcd()).toContainText("Bbm");
+  await expect(page.locator(".sheet .chart-part strong").first()).toHaveText("Bbm");
   if (process.env.MUSE_UI_SCREENSHOTS) await page.screenshot({ path: "test-results/desktop.png" });
   await page.getByRole("button", { name: "Close details" }).click();
   await page.getByRole("button", { name: "Setlists", exact: true }).click();
@@ -77,24 +81,72 @@ test("creates, transposes, setlists and reopens a song across three viewport siz
   await page.getByLabel("Name", { exact: true }).fill("First rehearsal");
   await page.getByRole("button", { name: "Save setlist" }).click();
   await page.getByRole("button", { name: "Song actions" }).click();
-  await page.getByRole("button", { name: "Add to setlist" }).click();
+  await page.getByRole("menuitem", { name: "Add to setlist" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "First rehearsal" }).click();
-  await expect(page.getByRole("status")).toContainText("Added to First rehearsal");
+  await expect(hint()).toContainText("Added to First rehearsal");
 
   await page.setViewportSize({ width: 900, height: 700 });
-  await expect(page.getByRole("complementary", { name: "Library" })).toBeVisible();
+  await expect(page.getByRole("complementary", { name: "Library browser" })).toBeVisible();
   await page.getByRole("button", { name: "Song details" }).click();
   await expect(page.getByRole("complementary", { name: "Song details" })).toBeVisible();
   await page.getByRole("button", { name: "Close details" }).click();
 
   await page.setViewportSize({ width: 390, height: 730 });
-  await expect(page.getByRole("complementary", { name: "Library" })).toBeHidden();
+  await expect(page.getByRole("complementary", { name: "Library browser" })).toBeHidden();
   await expect(page.getByRole("heading", { name: "Soundcheck", exact: true })).toBeVisible();
   await page.getByRole("navigation", { name: "Main navigation" }).getByRole("button", { name: "Library" }).click();
   await page.getByRole("button", { name: "Soundcheck", exact: false }).click();
   await expect(page.getByRole("heading", { name: "Soundcheck", exact: true })).toBeVisible();
-  await expect(page.getByText("1 / 1", { exact: true })).toBeVisible();
+  await expect(lcd()).toContainText("01/01");
   if (process.env.MUSE_UI_SCREENSHOTS) await page.screenshot({ path: "test-results/phone.png" });
+});
+
+test("organizes folders, section order, Nashville numbers, note items and keyboard paging", async () => {
+  await page.setViewportSize({ width: 1360, height: 820 });
+  await page.getByRole("button", { name: "Songs", exact: true }).click();
+  await page.getByRole("button", { name: "New folder" }).click();
+  await page.getByLabel("Folder name").fill("Worship");
+  await page.getByRole("button", { name: "Create folder" }).click();
+  await expect(page.getByRole("button", { name: "Worship", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByText("This folder is empty", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "All songs" }).click();
+  await page.getByRole("button", { name: "Soundcheck", exact: false }).first().click();
+  await page.getByRole("button", { name: "Song details" }).click();
+  const details = page.getByRole("complementary", { name: "Song details" });
+  await details.getByRole("checkbox", { name: "Worship" }).click();
+  await expect(details.getByRole("checkbox", { name: "Worship" })).toBeChecked();
+  await page.getByRole("button", { name: "Worship", exact: true }).click();
+  await expect(page.locator(".browser-scroll .song-row")).toHaveCount(1);
+
+  await details.getByRole("button", { name: "+ Chorus" }).click();
+  await details.getByRole("button", { name: "+ Chorus" }).click();
+  await expect(page.locator(".sheet .chart-heading")).toHaveCount(2);
+  await details.getByRole("checkbox", { name: "Nashville numbers" }).click();
+  await expect(details.getByRole("checkbox", { name: "Nashville numbers" })).toBeChecked();
+  await expect(page.locator(".sheet .chart-part strong").first()).toHaveText("1m");
+  await details.getByRole("checkbox", { name: "Nashville numbers" }).click();
+  await expect(details.getByRole("checkbox", { name: "Nashville numbers" })).not.toBeChecked();
+  await details.getByRole("button", { name: "Reset" }).click();
+  await expect(page.locator(".sheet .chart-heading")).toHaveCount(1);
+  await page.getByRole("button", { name: "Close details" }).click();
+
+  await page.getByRole("button", { name: "Setlists", exact: true }).click();
+  const set = page.getByRole("button", { name: "First rehearsal", exact: false }).first();
+  if (await set.getAttribute("aria-expanded") !== "true") await set.click();
+  await page.getByRole("button", { name: "Add note item" }).click();
+  await page.getByLabel("Note text").fill("Welcome and count-in");
+  await page.getByRole("button", { name: "Save note" }).click();
+  await page.getByRole("button", { name: "2 Welcome and count-in" }).click();
+  await expect(page.locator(".note-text")).toHaveText("Welcome and count-in");
+  await expect(lcd()).toContainText("02/02");
+
+  // Clicking Perform leaves focus on a button; arrow keys must still move through the set.
+  await page.getByRole("button", { name: "Perform" }).click();
+  await page.keyboard.press("ArrowLeft");
+  await expect(page.getByRole("heading", { name: "Soundcheck", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("complementary", { name: "Library browser" })).toBeVisible();
+  if (process.env.MUSE_UI_SCREENSHOTS) await page.screenshot({ path: "test-results/studio.png" });
 });
 
 function pdfFixture() {
@@ -123,7 +175,7 @@ test("renders a PDF and keeps an annotation after reopening", async () => {
   await page.locator("input[type=file][multiple]").setInputFiles({
     name: "Annotation check.pdf", mimeType: "application/pdf", buffer: pdfFixture()
   });
-  await expect(page.getByRole("status")).toContainText("1 added");
+  await expect(hint()).toContainText("1 added");
   const row = page.getByRole("button", { name: "Annotation check PDF" });
   await row.click();
   const canvas = page.getByLabel("PDF page 1");
@@ -132,7 +184,7 @@ test("renders a PDF and keeps an annotation after reopening", async () => {
     return p ? Array.from(p) : [];
   })).toEqual([51,102,153,255]);
   await page.getByRole("button", { name: "Song details" }).click();
-  await page.getByRole("button", { name: "Draw on page" }).click();
+  await page.getByRole("button", { name: "Pen", exact: true }).click();
   const ink = page.locator("svg.ink");
   await ink.click({ position: { x: 70, y: 100 } });
   await expect(ink.locator("circle")).toHaveCount(1);
@@ -187,6 +239,6 @@ test("previews and merges the untouched original backup through the Windows UI",
   await expect(page.getByText("41 set entries", { exact: false })).toBeVisible();
   await expect(page.getByText("Replace mode also restores supported preferences.")).toBeVisible();
   await page.getByRole("button", { name: "Merge library" }).click();
-  await expect(page.getByRole("status")).toContainText("2 setlists restored");
+  await expect(hint()).toContainText("2 setlists restored");
   await expect(page.getByRole("dialog")).toBeHidden();
 });

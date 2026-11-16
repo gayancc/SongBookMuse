@@ -1,32 +1,17 @@
 use crate::{Document, Result, Song, invalid};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use serde::Serialize;
 use uuid::Uuid;
 
 pub const MAX_DOCUMENT: usize = 24 * 1024 * 1024;
 pub const MAX_SOURCE: usize = 1024 * 1024;
 
-#[derive(Debug, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum Line {
-    Lyric { parts: Vec<Part> },
-    Heading { text: String },
-    Space,
+pub(crate) struct Chord<'a> {
+    pub(crate) root: i16,
+    pub(crate) quality: &'a str,
+    pub(crate) bass: Option<i16>,
 }
 
-#[derive(Debug, PartialEq, Serialize)]
-pub struct Part {
-    pub chord: Option<String>,
-    pub text: String,
-}
-
-struct Chord<'a> {
-    root: i16,
-    quality: &'a str,
-    bass: Option<i16>,
-}
-
-fn note(value: &str) -> Option<(i16, &str)> {
+pub(crate) fn note(value: &str) -> Option<(i16, &str)> {
     let mut chars = value.chars();
     let root: i16 = match chars.next()? {
         'A' => 9,
@@ -48,14 +33,14 @@ fn note(value: &str) -> Option<(i16, &str)> {
 }
 
 impl<'a> Chord<'a> {
-    fn parse(value: &'a str) -> Option<Self> {
+    pub(crate) fn parse(value: &'a str) -> Option<Self> {
         let (root, mut quality) = note(value)?;
         let mut bass = None;
-        if let Some((prefix, suffix)) = quality.rsplit_once('/') {
-            if let Some((pitch, "")) = note(suffix) {
-                quality = prefix;
-                bass = Some(pitch);
-            }
+        if let Some((prefix, suffix)) = quality.rsplit_once('/')
+            && let Some((pitch, "")) = note(suffix)
+        {
+            quality = prefix;
+            bass = Some(pitch);
         }
         let mut remaining = quality;
         while !remaining.is_empty() {
@@ -105,122 +90,10 @@ pub fn transpose(value: &str, shift: i16, flats: bool) -> String {
     result
 }
 
-fn directive(line: &str) -> Option<(&str, &str)> {
+pub(crate) fn directive(line: &str) -> Option<(&str, &str)> {
     let body = line.trim().strip_prefix('{')?.strip_suffix('}')?;
     let (key, value) = body.split_once(':').unwrap_or((body, ""));
     Some((key.trim(), value.trim()))
-}
-
-fn lyric(line: &str, shift: i16, flats: bool) -> Line {
-    let mut rest = line;
-    let mut parts = Vec::new();
-    let mut chord = None;
-    while let Some((before, candidate)) = rest.split_once('[') {
-        let Some((token, after)) = candidate.split_once(']') else {
-            break;
-        };
-        if token.contains('[') || token.trim().is_empty() {
-            break;
-        }
-        if !before.is_empty() || chord.is_some() {
-            parts.push(Part {
-                chord: chord.take(),
-                text: before.into(),
-            });
-        }
-        chord = if let Some(note) = token.strip_prefix('*') {
-            Some(note.into())
-        } else {
-            Some(transpose(token.trim(), shift, flats))
-        };
-        rest = after;
-    }
-    if !rest.is_empty() || chord.is_some() {
-        parts.push(Part {
-            chord,
-            text: rest.into(),
-        });
-    }
-    Line::Lyric { parts }
-}
-
-fn chord_row(line: &str) -> bool {
-    let mut tokens = line.split_whitespace().peekable();
-    tokens.peek().is_some() && tokens.all(|token| Chord::parse(token).is_some())
-}
-
-pub fn render(source: &str, shift: i16, flats: bool) -> Vec<Line> {
-    let mut lines = source.lines().peekable();
-    let mut result = Vec::new();
-    while let Some(line) = lines.next() {
-        let row = match directive(line) {
-            Some(("c" | "comment" | "ci" | "comment_italic" | "cb" | "comment_box", value)) => {
-                Line::Heading { text: value.into() }
-            }
-            Some(("soc" | "start_of_chorus", value)) => Line::Heading {
-                text: if value.is_empty() { "Chorus" } else { value }.into(),
-            },
-            Some(("sov" | "start_of_verse", value)) => Line::Heading {
-                text: if value.is_empty() { "Verse" } else { value }.into(),
-            },
-            Some(("sob" | "start_of_bridge", value)) => Line::Heading {
-                text: if value.is_empty() { "Bridge" } else { value }.into(),
-            },
-            Some(_) => continue,
-            None if line.starts_with('#') => continue,
-            None if line.trim().is_empty() => Line::Space,
-            None if chord_row(line) => {
-                let next = lines.peek().copied().filter(|next| {
-                    !next.trim().is_empty()
-                        && !next.contains('[')
-                        && directive(next).is_none()
-                        && !chord_row(next)
-                });
-                if let Some(words) = next {
-                    lines.next();
-                    let mut columns = Vec::new();
-                    let mut start = None;
-                    for (index, c) in line.char_indices().chain([(line.len(), ' ')]) {
-                        if c.is_whitespace() {
-                            if let Some(from) = start.take() {
-                                columns.push((line[..from].chars().count(), &line[from..index]));
-                            }
-                        } else if start.is_none() {
-                            start = Some(index);
-                        }
-                    }
-                    let text: Vec<char> = words.chars().collect();
-                    let mut parts = vec![Part {
-                        chord: None,
-                        text: text[..columns[0].0.min(text.len())].iter().collect(),
-                    }];
-                    for (index, (offset, name)) in columns.iter().enumerate() {
-                        let end = columns
-                            .get(index + 1)
-                            .map_or(text.len(), |pair| pair.0.min(text.len()));
-                        parts.push(Part {
-                            chord: Some(transpose(name, shift, flats)),
-                            text: text[(*offset).min(text.len())..end].iter().collect(),
-                        });
-                    }
-                    Line::Lyric { parts }
-                } else {
-                    Line::Lyric {
-                        parts: line
-                            .split_whitespace()
-                            .map(|s| Part {
-                                chord: Some(transpose(s, shift, flats)),
-                                text: " ".into(),
-                            })
-                            .collect(),
-                    }
-                }
-            }
-            None => lyric(line, shift, flats),
-        };
-        result.push(row);
-    }
-    result
 }
 
 pub fn import_song(name: &str, bytes: &[u8]) -> Result<Song> {
@@ -278,12 +151,14 @@ pub fn import_song(name: &str, bytes: &[u8]) -> Result<Song> {
 fn decode_text(bytes: &[u8]) -> Result<String> {
     if bytes.starts_with(&[0xff, 0xfe]) || bytes.starts_with(&[0xfe, 0xff]) {
         let payload = &bytes[2..];
-        if payload.len() % 2 != 0 {
+        if !payload.len().is_multiple_of(2) {
             return Err(invalid("Truncated UTF-16 text"));
         }
         let little = bytes[0] == 0xff;
         let words = payload
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| {
                 if little {
                     u16::from_le_bytes([pair[0], pair[1]])

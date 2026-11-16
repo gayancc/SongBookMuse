@@ -20,3 +20,24 @@ export function Modal({ title, close, children }: { title: string; close: () => 
     <div className="modal-body">{error && <p className="dialog-error" role="alert">{error}</p>}{children}</div>
   </dialog>;
 }
+
+interface StepperProps {
+  label: string;
+  value: number;
+  display?: string;
+  min: number;
+  max: number;
+  step?: number;
+  onChange: (value: number) => void;
+  disabled?: boolean;
+}
+
+/** Channel-rack style value strip: label, LCD readout and nudge buttons. */
+export function Stepper({ label, value, display, min, max, step = 1, onChange, disabled }: StepperProps) {
+  return <div className="stepper" role="group" aria-label={label}>
+    <span className="stepper-label">{label}</span>
+    <button type="button" aria-label={label + " down"} disabled={disabled || value <= min} onClick={() => onChange(Math.max(min, value - step))}>−</button>
+    <output className="lcd-value" aria-live="polite">{display ?? value}</output>
+    <button type="button" aria-label={label + " up"} disabled={disabled || value >= max} onClick={() => onChange(Math.min(max, value + step))}>+</button>
+  </div>;
+}

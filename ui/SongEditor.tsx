@@ -28,11 +28,14 @@ export function SongEditor({ song, settings, onClose, onSave }:
         <label>Duration (seconds)<input type="number" min="0" max="86400" value={draft.duration} onChange={e => set("duration", Number(e.target.value))}/></label>
         <label>Time signature<input placeholder="4/4" value={draft.time_signature} onChange={e => set("time_signature", e.target.value)}/></label>
         <label>Copyright<input value={draft.copyright} onChange={e => set("copyright", e.target.value)}/></label>
+        <label>Song number<input type="number" min="0" max="99999" value={draft.number} onChange={e => set("number", Math.max(0, Math.floor(Number(e.target.value) || 0)))}/></label>
+        <label>Section order<input placeholder="Verse 1, Chorus, Verse 2, Chorus" value={draft.section_order} onChange={e => set("section_order", e.target.value)}/></label>
         <label className="wide">Tags, separated by commas<input defaultValue={draft.tags.join(", ")} onChange={e => set("tags", e.target.value.split(",").map(v => v.trim()).filter(Boolean))}/></label>
       </div>
       {!song.document && <div className="editor-split">
         <label>Source<textarea rows={12} spellCheck={false} value={draft.source} onChange={e => set("source", e.target.value)} placeholder="[Am]Add a chord before the lyric"/></label>
-        <section className="editor-preview" aria-label="Live preview"><Chart source={draft.source} shift={draft.transpose} flats={settings.flats}/></section>
+        <section className="editor-preview" aria-label="Live preview"><Chart source={draft.source} options={{ shift: draft.transpose, flats: settings.flats, key: draft.key,
+          nashville: settings.notation === "nashville", key_spelling: settings.key_spelling, section_order: draft.section_order }}/></section>
       </div>}
       <label>Notes<textarea rows={3} value={draft.notes} onChange={e => set("notes", e.target.value)}/></label>
       <label className="track-input">Backing track (MP3 or WAV)<input type="file" accept=".mp3,.wav" disabled={trackBusy} onChange={e => {

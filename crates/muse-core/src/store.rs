@@ -23,18 +23,47 @@ CREATE TABLE migration_sources (sha256 TEXT PRIMARY KEY, source BLOB NOT NULL);
 PRAGMA user_version = 1;
 ";
 
+/// Version 2: note entries (nullable song), folders, refreshed summaries.
+const MIGRATE_V2: &str = "
+CREATE TABLE entries_v2 (
+  id TEXT PRIMARY KEY, set_id TEXT NOT NULL REFERENCES sets(id) ON DELETE CASCADE,
+  song_id TEXT REFERENCES songs(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL, transpose INTEGER, capo INTEGER, note TEXT,
+  UNIQUE (set_id, position),
+  CHECK ((song_id IS NULL) <> (note IS NULL))
+);
+INSERT INTO entries_v2 SELECT id, set_id, song_id, position, transpose, capo, NULL FROM entries;
+DROP TABLE entries;
+ALTER TABLE entries_v2 RENAME TO entries;
+CREATE TABLE folders (id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER NOT NULL);
+PRAGMA user_version = 2;
+";
+
 pub struct Library(Connection);
 
 impl Library {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
         let mut connection = Connection::open(path)?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
+        let existing = connection.query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0))?;
+        if existing == 1 {
+            preserve_before_migration(&connection, path)?;
+        }
         let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        match tx.query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0))? {
-            0 => tx.execute_batch(SCHEMA)?,
-            1 => {}
-            _ => return Err(invalid("This library was created by a newer version")),
+        let mut version = tx.query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0))?;
+        if version == 0 {
+            tx.execute_batch(SCHEMA)?;
+            version = 1;
+        }
+        if version == 1 {
+            tx.execute_batch(MIGRATE_V2)?;
+            refresh_summaries(&tx)?;
+            version = 2;
+        }
+        if version != 2 {
+            return Err(invalid("This library was created by a newer version"));
         }
         tx.commit()?;
         Ok(Self(connection))
@@ -98,27 +127,33 @@ impl Library {
             .map(|(i, s)| (s.id.to_string(), i))
             .collect();
         let mut stmt = self.0.prepare(
-            "SELECT set_id, id, song_id, transpose, capo FROM entries ORDER BY set_id, position",
+            "SELECT set_id, id, song_id, transpose, capo, note FROM entries ORDER BY set_id, position",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
+                r.get::<_, Option<String>>(2)?,
                 r.get(3)?,
                 r.get(4)?,
+                r.get::<_, Option<String>>(5)?,
             ))
         })?;
         for row in rows {
-            let (set, id, song, transpose, capo) = row?;
+            let (set, id, song, transpose, capo, note) = row?;
             let set = index
                 .get(&set)
                 .ok_or_else(|| invalid("Set entry has no parent set"))?;
             sets[*set].entries.push(SetEntry {
                 id: parse_id(&id)?,
-                song_id: parse_id(&song)?,
+                song_id: song
+                    .as_deref()
+                    .map(parse_id)
+                    .transpose()?
+                    .unwrap_or_default(),
                 transpose,
                 capo,
+                note,
             });
         }
         sets.sort_by(|a, b| {
@@ -149,6 +184,58 @@ impl Library {
 
     pub fn delete_set(&self, id: &str) -> Result<()> {
         self.0.execute("DELETE FROM sets WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    pub fn folders(&self) -> Result<Vec<Folder>> {
+        let mut stmt = self
+            .0
+            .prepare("SELECT id, name FROM folders ORDER BY position, lower(name), id")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        rows.map(|row| {
+            let (id, name) = row?;
+            Ok(Folder {
+                id: parse_id(&id)?,
+                name,
+            })
+        })
+        .collect()
+    }
+
+    pub fn save_folder(&self, mut folder: Folder) -> Result<Folder> {
+        folder.name = folder.name.trim().into();
+        if folder.name.is_empty() || folder.name.len() > 256 {
+            return Err(invalid("Folder name is missing or too long"));
+        }
+        if folder.id.is_nil() {
+            folder.id = Uuid::new_v4();
+        }
+        self.0.execute(
+            "INSERT INTO folders VALUES (?1, ?2, (SELECT COALESCE(MAX(position) + 1, 0) FROM folders))
+            ON CONFLICT(id) DO UPDATE SET name = excluded.name",
+            params![folder.id.to_string(), folder.name],
+        )?;
+        Ok(folder)
+    }
+
+    /// Deletes the folder and removes it from every song; the songs are kept.
+    pub fn delete_folder(&mut self, id: &str) -> Result<()> {
+        let folder = parse_id(id)?;
+        let tx = self
+            .0
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        // Match on the canonical UUID text that summaries store, not the caller's spelling.
+        let canonical = folder.to_string();
+        tx.execute("DELETE FROM folders WHERE id = ?1", [&canonical])?;
+        let members = {
+            let mut stmt = tx.prepare("SELECT payload FROM songs WHERE instr(summary, ?1) > 0")?;
+            decode_rows::<Song>(stmt.query_map([&canonical], |r| r.get::<_, String>(0))?)?
+        };
+        for mut song in members {
+            song.folders.retain(|f| *f != folder);
+            write_song(&tx, &song)?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -188,6 +275,7 @@ impl Library {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let backup = Backup {
             songs,
+            folders: self.folders()?,
             sets: self.sets()?,
             settings: Some(self.settings()?),
             migration_sources,
@@ -202,7 +290,7 @@ impl Library {
             .0
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         if mode == RestoreMode::Replace {
-            tx.execute_batch("DELETE FROM sets; DELETE FROM songs; DELETE FROM settings; DELETE FROM migration_sources;")?;
+            tx.execute_batch("DELETE FROM sets; DELETE FROM songs; DELETE FROM settings; DELETE FROM migration_sources; DELETE FROM folders;")?;
         }
         let mut report = RestoreReport::default();
         let mut remap = HashMap::new();
@@ -230,8 +318,14 @@ impl Library {
             remap.insert(original, song.id);
             report.songs += 1;
         }
+        for (position, folder) in backup.folders.iter().enumerate() {
+            tx.execute(
+                "INSERT OR IGNORE INTO folders VALUES (?1, ?2, ?3)",
+                params![folder.id.to_string(), folder.name, position as i64],
+            )?;
+        }
         for mut set in backup.sets {
-            for entry in &mut set.entries {
+            for entry in set.entries.iter_mut().filter(|e| !e.is_note()) {
                 entry.song_id = *remap
                     .get(&entry.song_id)
                     .ok_or_else(|| invalid("Set refers to an absent song"))?;
@@ -248,22 +342,29 @@ impl Library {
                 if let Some(metadata) = metadata {
                     let existing: Setlist = serde_json::from_str(&metadata)?;
                     candidate.entries.clear();
-                    let mut stmt = tx.prepare("SELECT song_id, transpose, capo FROM entries WHERE set_id=?1 ORDER BY position")?;
+                    let mut stmt = tx.prepare(
+                        "SELECT COALESCE(song_id, ''), transpose, capo, note FROM entries
+                        WHERE set_id=?1 ORDER BY position",
+                    )?;
                     let existing_entries = stmt
                         .query_map([set.id.to_string()], |r| {
                             Ok((
                                 r.get::<_, String>(0)?,
                                 r.get::<_, Option<i16>>(1)?,
                                 r.get::<_, Option<i16>>(2)?,
+                                r.get::<_, Option<String>>(3)?,
                             ))
                         })?
                         .collect::<rusqlite::Result<Vec<_>>>()?;
-                    if candidate == existing
-                        && existing_entries.into_iter().eq(set
-                            .entries
-                            .iter()
-                            .map(|e| (e.song_id.to_string(), e.transpose, e.capo)))
-                    {
+                    let incoming = set.entries.iter().map(|e| {
+                        let song = if e.is_note() {
+                            String::new()
+                        } else {
+                            e.song_id.to_string()
+                        };
+                        (song, e.transpose, e.capo, e.note.clone())
+                    });
+                    if candidate == existing && existing_entries.into_iter().eq(incoming) {
                         continue;
                     }
                     set.id = Uuid::new_v4();
@@ -275,13 +376,13 @@ impl Library {
             write_set(&tx, &set)?;
             report.sets += 1;
         }
-        if mode == RestoreMode::Replace {
-            if let Some(settings) = backup.settings {
-                tx.execute(
-                    "INSERT INTO settings VALUES (1,?1)",
-                    [serde_json::to_string(&settings)?],
-                )?;
-            }
+        if mode == RestoreMode::Replace
+            && let Some(settings) = backup.settings
+        {
+            tx.execute(
+                "INSERT INTO settings VALUES (1,?1)",
+                [serde_json::to_string(&settings)?],
+            )?;
         }
         for source in backup.migration_sources {
             let bytes = STANDARD
@@ -325,6 +426,8 @@ pub(crate) fn validate_song(s: &Song) -> Result<()> {
         || s.time_signature.len() > 64
         || s.tags.len() > 128
         || s.tags.iter().any(|t| t.len() > 256)
+        || s.folders.len() > 512
+        || s.section_order.len() > 4096
     {
         return Err(invalid(
             "Song metadata or source is missing or exceeds the supported limits",
@@ -361,7 +464,10 @@ pub(crate) fn validate_song(s: &Song) -> Result<()> {
 }
 
 pub(crate) fn validate_settings(s: &Settings) -> Result<()> {
-    if !matches!(s.theme.as_str(), "dark" | "light" | "contrast") || !(65..=200).contains(&s.scale)
+    if !matches!(s.theme.as_str(), "dark" | "light" | "contrast")
+        || !(65..=200).contains(&s.scale)
+        || !matches!(s.notation.as_str(), "standard" | "nashville")
+        || s.autoscroll_delay > 600
     {
         return Err(invalid("Invalid appearance settings"));
     }
@@ -438,19 +544,70 @@ fn write_set(tx: &Transaction<'_>, set: &Setlist) -> Result<()> {
         params![id, serde_json::to_string(&metadata)?],
     )?;
     tx.execute("DELETE FROM entries WHERE set_id=?1", [&id])?;
-    let mut stmt = tx.prepare("INSERT INTO entries VALUES (?1,?2,?3,?4,?5,?6)")?;
+    let mut stmt = tx.prepare("INSERT INTO entries VALUES (?1,?2,?3,?4,?5,?6,?7)")?;
     for (position, entry) in set.entries.iter().enumerate() {
-        if entry.id.is_nil() {
-            return Err(invalid("Set entry has no identifier"));
-        }
+        validate_entry(entry)?;
+        let song = (!entry.is_note()).then(|| entry.song_id.to_string());
         stmt.execute(params![
             entry.id.to_string(),
             id,
-            entry.song_id.to_string(),
+            song,
             position as i64,
             entry.transpose,
-            entry.capo
+            entry.capo,
+            entry.note
         ])?;
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_entry(entry: &SetEntry) -> Result<()> {
+    if entry.id.is_nil() {
+        return Err(invalid("Set entry has no identifier"));
+    }
+    match &entry.note {
+        Some(note) if note.len() > 16 * 1024 => Err(invalid("Set note exceeds 16 KiB")),
+        Some(_) if !entry.song_id.is_nil() => Err(invalid("A note item cannot reference a song")),
+        None if entry.song_id.is_nil() => Err(invalid("Set entry has no song")),
+        _ => Ok(()),
+    }
+}
+
+/// Rebuilds stored summaries so new summary fields are populated after a migration.
+/// Rows are processed one at a time; a payload that no longer decodes keeps its old summary
+/// (which deserializes with defaults) instead of making the whole library unopenable.
+fn refresh_summaries(tx: &Transaction<'_>) -> Result<()> {
+    let ids: Vec<String> = {
+        let mut stmt = tx.prepare("SELECT id FROM songs")?;
+        stmt.query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    for id in ids {
+        let payload: String =
+            tx.query_row("SELECT payload FROM songs WHERE id = ?1", [&id], |r| {
+                r.get(0)
+            })?;
+        if let Ok(song) = serde_json::from_str::<Song>(&payload) {
+            write_song(tx, &song)?;
+        }
+    }
+    Ok(())
+}
+
+/// Copies a file-backed library to `<name>.v1.bak` before the first v2 migration so an
+/// unexpected failure or a downgrade can recover the untouched data.
+fn preserve_before_migration(connection: &Connection, path: &Path) -> Result<()> {
+    let Some(name) = path.file_name().filter(|_| path.is_file()) else {
+        return Ok(()); // in-memory or virtual database
+    };
+    let mut target = name.to_os_string();
+    target.push(".v1.bak");
+    let target = path.with_file_name(target);
+    if !target.exists() {
+        let target = target
+            .to_str()
+            .ok_or_else(|| invalid("Library path is not valid Unicode"))?;
+        connection.execute("VACUUM INTO ?1", [target])?;
     }
     Ok(())
 }

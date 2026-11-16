@@ -1,11 +1,13 @@
 mod audio;
 mod backup;
+mod chart;
 mod midi;
 mod music;
 mod store;
 
 pub use audio::*;
 pub use backup::*;
+pub use chart::*;
 pub use midi::*;
 pub use music::*;
 pub use store::*;
@@ -56,6 +58,14 @@ pub struct Song {
     pub ink: Vec<Stroke>,
     pub midi: Vec<MidiMessage>,
     pub track: Option<Track>,
+    /// Folder memberships (reference: `Songs._folders`).
+    pub folders: Vec<Uuid>,
+    /// Comma-separated section labels to play in order (reference: `Songs.SectionOrder`).
+    pub section_order: String,
+    /// Locked songs reject edits from the UI (reference: `Songs.locked`).
+    pub locked: bool,
+    /// Optional hymnal/catalog number (reference: `Songs.SongNumber`).
+    pub number: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -70,6 +80,16 @@ pub struct Stroke {
     pub color: String,
     pub width: f64,
     pub points: Vec<[f64; 2]>,
+    /// Translucent highlighter stroke.
+    #[serde(default)]
+    pub highlight: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Folder {
+    pub id: Uuid,
+    pub name: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -85,9 +105,19 @@ pub struct Setlist {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SetEntry {
     pub id: Uuid,
+    /// Nil for note items.
     pub song_id: Uuid,
     pub transpose: Option<i16>,
     pub capo: Option<i16>,
+    /// Text of a note item (reference: `SetItems.ItemType` / `Content`).
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+impl SetEntry {
+    pub fn is_note(&self) -> bool {
+        self.note.is_some()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -98,6 +128,12 @@ pub struct Settings {
     pub columns: bool,
     pub flats: bool,
     pub compact_sidebar: bool,
+    /// `standard` or `nashville`.
+    pub notation: String,
+    /// Seconds before auto-scroll starts moving.
+    pub autoscroll_delay: u16,
+    /// Spell transposed chords from the target key when the song key is known.
+    pub key_spelling: bool,
 }
 
 impl Default for Settings {
@@ -108,11 +144,15 @@ impl Default for Settings {
             columns: false,
             flats: false,
             compact_sidebar: false,
+            notation: "standard".into(),
+            autoscroll_delay: 10,
+            key_spelling: true,
         }
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SongSummary {
     pub id: Uuid,
     pub title: String,
@@ -123,6 +163,9 @@ pub struct SongSummary {
     pub favorite: bool,
     pub archived: bool,
     pub kind: String,
+    pub folders: Vec<Uuid>,
+    pub number: u32,
+    pub locked: bool,
 }
 
 impl From<&Song> for SongSummary {
@@ -147,6 +190,9 @@ impl From<&Song> for SongSummary {
                     }
                 })
                 .into(),
+            folders: s.folders.clone(),
+            number: s.number,
+            locked: s.locked,
         }
     }
 }
