@@ -4,7 +4,7 @@ import { Modal } from "./components";
 import { Chart } from "./Chart";
 import { MidiEvents } from "./MidiSettings";
 import { encode } from "./commands";
-import type { Settings, Song, Track } from "./model";
+import { notationOptions, type Settings, type Song, type Track } from "./model";
 
 export function SongEditor({ song, settings, onClose, onSave }:
   { song: Song; settings: Settings; onClose: () => void; onSave: (s: Song) => Promise<void> }) {
@@ -35,7 +35,7 @@ export function SongEditor({ song, settings, onClose, onSave }:
       {!song.document && <div className="editor-split">
         <label>Source<textarea rows={12} spellCheck={false} value={draft.source} onChange={e => set("source", e.target.value)} placeholder="[Am]Add a chord before the lyric"/></label>
         <section className="editor-preview" aria-label="Live preview"><Chart source={draft.source} options={{ shift: draft.transpose, flats: settings.flats, key: draft.key,
-          nashville: settings.notation === "nashville", key_spelling: settings.key_spelling, section_order: draft.section_order }}/></section>
+          ...notationOptions(settings.notation), key_spelling: settings.key_spelling, section_order: draft.section_order }}/></section>
       </div>}
       <label>Notes<textarea rows={3} value={draft.notes} onChange={e => set("notes", e.target.value)}/></label>
       <label className="track-input">Backing track (MP3 or WAV)<input type="file" accept=".mp3,.wav" disabled={trackBusy} onChange={e => {

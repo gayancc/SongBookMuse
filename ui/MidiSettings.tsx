@@ -2,14 +2,13 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Plus, X } from "lucide-react";
 import { IconButton } from "./components";
-import type { MidiMessage } from "./model";
+import { navigationActions, type MidiMessage, type NavigationAction } from "./model";
 
 type Port = { id: string; label: string };
 type Ports = { supported: boolean; inputs: Port[]; outputs: Port[] };
-type Mapping = { channel: number; number: number; note: boolean; action: string };
+type Mapping = { channel: number; number: number; note: boolean; action: NavigationAction };
 type Setup = { input: string; output: string; bindings: Mapping[] };
 const defaults: Setup = { input: "", output: "", bindings: [] };
-const labels: Record<string, string> = { previous_song: "Previous song", next_song: "Next song", page_up: "Page up", page_down: "Page down" };
 
 export function MidiSettings({ onError }: { onError: (cause: unknown) => void }) {
   const [ports, setPorts] = useState<Ports | null>(null);
@@ -49,8 +48,8 @@ export function MidiSettings({ onError }: { onError: (cause: unknown) => void })
         </select></label>
       </div>
       {setup.bindings.map((b,i) => <div className="midi-row" key={i}>
-        <label>Action<select value={b.action} onChange={e => change(i, { action: e.target.value })}>
-          {Object.entries(labels).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <label>Action<select value={b.action} onChange={e => change(i, { action: e.target.value as NavigationAction })}>
+          {Object.entries(navigationActions).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <label>Message<select value={b.note ? "note" : "cc"} onChange={e => change(i, { note: e.target.value === "note" })}><option value="cc">CC</option><option value="note">Note</option></select></label>
         <label>Ch.<input type="number" min="1" max="16" value={b.channel} onChange={e => change(i, { channel: Number(e.target.value) })}/></label>
         <label>Number<input type="number" min="0" max="127" value={b.number} onChange={e => change(i, { number: Number(e.target.value) })}/></label>

@@ -27,3 +27,4 @@ Section pattern colours: verse `--verse` blue, chorus `--chorus` orange (also ti
 | Radius | 3 px everywhere (hardware feel), 50% only for colour swatches and LEDs |
 | Controls | Gradient chassis buttons with inset press state; 44 px phone targets |
 | Icons | Lucide with accessible names; names surface in the hint bar on hover |
+| Chord diagrams | Graphite grid lines in `--ink-soft`, nut in `--ink-text`, fingered dots and barres in `--accent`, chord name in `--chord`; cells are 3 px paper tiles inside a tinted well and scale with zoom |

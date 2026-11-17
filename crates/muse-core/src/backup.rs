@@ -92,14 +92,33 @@ pub fn write_backup(library: &Library) -> Result<Vec<u8>> {
             Ok(())
         }
     }
+    let backup = library.snapshot()?;
+    backup.validate_migration_source_size()?;
     let mut bytes = Bounded(SIGNATURE.to_vec());
-    serde_json::to_writer(&mut bytes, &library.snapshot()?)?;
+    serde_json::to_writer(&mut bytes, &backup)?;
     Ok(bytes.0)
 }
 
+pub(crate) fn validate_migration_source_size(encoded_size: i64) -> Result<()> {
+    if encoded_size > (MAX_SOURCE_ARCHIVE.div_ceil(3) * 4) as i64 {
+        return Err(invalid("Retained migration sources exceed 36 MiB"));
+    }
+    Ok(())
+}
+
 impl Backup {
+    fn validate_migration_source_size(&self) -> Result<()> {
+        validate_migration_source_size(
+            self.migration_sources
+                .iter()
+                .map(|s| s.source.len() as i64)
+                .sum(),
+        )
+    }
+
     pub(crate) fn validate(&self) -> Result<()> {
         if self.songs.len() > MAX_RECORDS
+            || self.folders.len() > MAX_RECORDS
             || self.sets.len() > MAX_RECORDS
             || self.sets.iter().map(|s| s.entries.len()).sum::<usize>() > MAX_RECORDS
         {
@@ -146,12 +165,8 @@ impl Backup {
         if let Some(settings) = &self.settings {
             validate_settings(settings)?;
         }
-        let mut retained_size = 0;
+        self.validate_migration_source_size()?;
         for source in &self.migration_sources {
-            retained_size += source.source.len();
-            if retained_size > MAX_SOURCE_ARCHIVE.div_ceil(3) * 4 {
-                return Err(invalid("Retained migration sources exceed 36 MiB"));
-            }
             let archive = STANDARD
                 .decode(&source.source)
                 .map_err(|_| invalid("Invalid retained source encoding"))?;
@@ -168,7 +183,19 @@ struct Sbp {
     songs: Vec<SbpSong>,
     sets: Vec<SbpSet>,
     #[serde(default)]
-    folders: Vec<serde_json::Value>,
+    folders: Vec<SbpFolder>,
+}
+
+#[derive(Deserialize)]
+struct SbpFolder {
+    #[serde(rename = "Id")]
+    id: i64,
+    #[serde(rename = "Name")]
+    name: String,
+    #[serde(default, rename = "Order")]
+    order: i64,
+    #[serde(default, rename = "Deleted")]
+    deleted: i64,
 }
 
 #[derive(Deserialize)]
@@ -199,6 +226,8 @@ struct SbpSong {
     notes: Option<String>,
     #[serde(default, rename = "_tags")]
     tags: String,
+    #[serde(default, rename = "_folders")]
+    folders: Option<serde_json::Value>,
     #[serde(default, rename = "Copyright")]
     copyright: String,
     #[serde(default, rename = "timeSig")]
@@ -311,21 +340,44 @@ fn read_sbp(bytes: &[u8], warnings: &mut Vec<String>) -> Result<Backup> {
     if zip.len() > 1024 {
         return Err(invalid("Archive has too many members"));
     }
-    let mut names = HashSet::new();
+    let mut header_offsets = Vec::with_capacity(zip.len());
     let mut total = 0_u64;
     for index in 0..zip.len() {
         let entry = zip.by_index(index)?;
+        header_offsets.push(entry.central_header_start());
         total = total
             .checked_add(entry.size())
             .ok_or_else(|| invalid("Invalid archive size"))?;
-        if entry.enclosed_name().is_none()
-            || entry.is_symlink()
-            || !names.insert(entry.name().to_owned())
-            || total > MAX_BACKUP as u64
-        {
+        if entry.enclosed_name().is_none() || entry.is_symlink() || total > MAX_BACKUP as u64 {
+            return Err(invalid("Unsafe archive path or expanded size"));
+        }
+    }
+
+    // zip retains only the last central header for each name. Under APPNOTE
+    // 4.3.12, file headers are contiguous, so a suppressed header leaves a gap.
+    // Stop at the last file header to leave optional directory trailers untouched.
+    const CENTRAL_HEADER_SIZE: usize = 46;
+    header_offsets.sort_unstable();
+    let mut expected_offset = zip.central_directory_start();
+    for offset in header_offsets {
+        if offset != expected_offset {
             return Err(invalid(
-                "Unsafe archive path, duplicate member, or expanded size",
+                "Archive has duplicate members or an invalid central directory",
             ));
+        }
+        let header = usize::try_from(offset)
+            .ok()
+            .and_then(|start| bytes.get(start..))
+            .and_then(|tail| tail.first_chunk::<CENTRAL_HEADER_SIZE>())
+            .ok_or_else(|| invalid("Invalid archive central header"))?;
+        // These three little-endian lengths describe the name, extra data and comment.
+        let variable_size = header[28..34]
+            .chunks_exact(2)
+            .map(|length| u64::from(u16::from_le_bytes([length[0], length[1]])))
+            .sum::<u64>();
+        expected_offset += CENTRAL_HEADER_SIZE as u64 + variable_size;
+        if expected_offset > bytes.len() as u64 {
+            return Err(invalid("Invalid archive central header length"));
         }
     }
 
@@ -378,8 +430,11 @@ fn read_sbp(bytes: &[u8], warnings: &mut Vec<String>) -> Result<Backup> {
         return Err(invalid("Unsupported legacy backup backup version"));
     }
 
-    let data: Sbp = serde_json::from_slice(&raw[version_end + 1..])?;
-    if data.songs.len() > MAX_RECORDS || data.sets.len() > MAX_RECORDS {
+    let mut data: Sbp = serde_json::from_slice(&raw[version_end + 1..])?;
+    if data.songs.len() > MAX_RECORDS
+        || data.sets.len() > MAX_RECORDS
+        || data.folders.len() > MAX_RECORDS
+    {
         return Err(invalid("Backup record limit exceeded"));
     }
     let digest = format!("{:x}", Sha256::digest(bytes));
@@ -395,8 +450,25 @@ fn read_sbp(bytes: &[u8], warnings: &mut Vec<String>) -> Result<Backup> {
         }
     }
 
+    data.folders.sort_by_key(|folder| folder.order);
+    let mut folder_ids = HashMap::new();
+    let mut folders = Vec::new();
+    for folder in data.folders {
+        let id = (folder.deleted == 0).then(|| stable_id(&digest, "folder", folder.id));
+        if folder_ids.insert(folder.id, id).is_some() {
+            return Err(invalid("Duplicate legacy backup folder identifier"));
+        }
+        if let Some(id) = id {
+            folders.push(Folder {
+                id,
+                name: folder.name,
+            });
+        }
+    }
+
     let mut ids = HashMap::new();
     let mut songs = Vec::new();
+    let mut unmapped_memberships = false;
     for s in data.songs {
         if s.deleted && !linked.contains(&s.id) {
             continue;
@@ -412,6 +484,23 @@ fn read_sbp(bytes: &[u8], warnings: &mut Vec<String>) -> Result<Backup> {
             return Err(invalid("Duplicate legacy backup song identifier"));
         }
         let tags = serde_json::from_str::<Vec<String>>(&s.tags).unwrap_or_default();
+        let mut memberships = Vec::new();
+        if let Some(value) = &s.folders {
+            let parsed = value
+                .as_str()
+                .and_then(|encoded| serde_json::from_str::<Vec<i64>>(encoded).ok());
+            if let Some(parsed) = parsed {
+                for folder in parsed {
+                    match folder_ids.get(&folder) {
+                        Some(Some(id)) => memberships.push(*id),
+                        Some(None) => {}
+                        None => unmapped_memberships = true,
+                    }
+                }
+            } else {
+                unmapped_memberships = true;
+            }
+        }
         let parsed = import_song("song.pro", s.content.as_bytes())?;
         songs.push(Song {
             id,
@@ -436,6 +525,7 @@ fn read_sbp(bytes: &[u8], warnings: &mut Vec<String>) -> Result<Backup> {
             notes: s.notes.unwrap_or_default(),
             copyright: s.copyright,
             tags,
+            folders: memberships,
             archived: s.deleted,
             ..Song::default()
         });
@@ -455,6 +545,7 @@ fn read_sbp(bytes: &[u8], warnings: &mut Vec<String>) -> Result<Backup> {
                 song_id,
                 transpose: Some(item.shift),
                 capo: (item.capo >= 0).then_some(item.capo),
+                section_order: None,
                 note: None,
             });
         }
@@ -475,12 +566,15 @@ fn read_sbp(bytes: &[u8], warnings: &mut Vec<String>) -> Result<Backup> {
     warnings.push(
         "Original drawings and unrecognized settings are retained in the migration archive.".into(),
     );
-    if !data.folders.is_empty() {
-        warnings.push("Folder records are retained in the original archive.".into());
+    if unmapped_memberships {
+        warnings.push(
+            "Some folder memberships could not be mapped and are retained in the original archive."
+                .into(),
+        );
     }
     Ok(Backup {
         songs,
-        folders: Vec::new(),
+        folders,
         sets,
         settings,
         migration_sources: vec![MigrationSource {

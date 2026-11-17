@@ -21,6 +21,8 @@ const DEGREES: [&str; 12] = [
 pub enum Line {
     Lyric {
         parts: Vec<Part>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        style: Option<LyricStyle>,
     },
     Heading {
         text: String,
@@ -39,6 +41,12 @@ pub struct Part {
     pub text: String,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct LyricStyle {
+    pub color: Option<String>,
+    pub fill: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default)]
 pub struct RenderOptions {
@@ -50,6 +58,8 @@ pub struct RenderOptions {
     pub key_spelling: bool,
     /// Comma-separated section labels; empty keeps source order.
     pub section_order: String,
+    /// Note naming for letter chords: `letter`, `german` (H for B, B for Bb) or `latin` (Do-Si).
+    pub naming: String,
 }
 
 impl Default for RenderOptions {
@@ -61,6 +71,50 @@ impl Default for RenderOptions {
             nashville: false,
             key_spelling: true,
             section_order: String::new(),
+            naming: "letter".into(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Naming {
+    Letter,
+    German,
+    Latin,
+}
+
+impl Naming {
+    fn parse(value: &str) -> Self {
+        match value {
+            "german" => Self::German,
+            "latin" => Self::Latin,
+            _ => Self::Letter,
+        }
+    }
+
+    /// Renames a letter note (`C`, `F#`, `Bb`) into this naming, keeping the accidental.
+    fn localize(self, name: &str) -> String {
+        let letter = &name[..1];
+        let accidental = &name[1..];
+        match self {
+            Self::Letter => name.into(),
+            Self::German => match (letter, accidental) {
+                ("B", "b" | "♭") => "B".into(),
+                ("B", _) => format!("H{accidental}"),
+                _ => name.into(),
+            },
+            Self::Latin => {
+                let syllable = match letter {
+                    "C" => "Do",
+                    "D" => "Re",
+                    "E" => "Mi",
+                    "F" => "Fa",
+                    "G" => "Sol",
+                    "A" => "La",
+                    _ => "Si",
+                };
+                format!("{syllable}{accidental}")
+            }
         }
     }
 }
@@ -91,6 +145,7 @@ struct Formatter {
     shift: i16,
     names: &'static [&'static str; 12],
     nashville_root: Option<i16>,
+    naming: Naming,
 }
 
 impl Formatter {
@@ -115,6 +170,7 @@ impl Formatter {
                 .nashville
                 .then(|| tonic(&options.key).map(|(root, _)| root))
                 .flatten(),
+            naming: Naming::parse(&options.naming),
         }
     }
 
@@ -131,17 +187,30 @@ impl Formatter {
             }
             return result;
         }
-        if self.shift == 0 {
+        if self.shift == 0 && self.naming == Naming::Letter {
             return value.into();
         }
-        let pitch = |n: i16| self.names[(n + self.shift).rem_euclid(12) as usize];
-        let mut result = format!("{}{}", pitch(chord.root), chord.quality);
+        // Untransposed chords keep their source accidental; transposed ones use the key table.
+        let root = match self.shift {
+            0 => source_root(value),
+            _ => self.names[(chord.root + self.shift).rem_euclid(12) as usize],
+        };
+        let mut result = format!("{}{}", self.naming.localize(root), chord.quality);
         if let Some(bass) = chord.bass {
+            let name = match self.shift {
+                0 => value.rsplit_once('/').map_or("", |(_, bass)| bass),
+                _ => self.names[(bass + self.shift).rem_euclid(12) as usize],
+            };
             result.push('/');
-            result.push_str(pitch(bass));
+            result.push_str(&self.naming.localize(name));
         }
         result
     }
+}
+
+/// The root note exactly as written in a parsed chord, such as `Eb` in `Eb7`.
+fn source_root(value: &str) -> &str {
+    note(value).map_or(value, |(_, rest)| &value[..value.len() - rest.len()])
 }
 
 /// Transposes a key for display, spelling it by its own conventional accidental when enabled.
@@ -156,7 +225,7 @@ pub fn display_key(key: &str, shift: i16, flats: bool, key_spelling: bool) -> St
     .format(key.trim())
 }
 
-fn lyric(line: &str, fmt: &Formatter) -> Line {
+fn lyric(line: &str, fmt: &Formatter) -> Vec<Part> {
     let mut rest = line;
     let mut parts = Vec::new();
     let mut chord = None;
@@ -185,26 +254,41 @@ fn lyric(line: &str, fmt: &Formatter) -> Line {
             text: rest.into(),
         });
     }
-    Line::Lyric { parts }
+    parts
 }
 
-fn chord_row(line: &str) -> bool {
-    let mut tokens = line.split_whitespace().peekable();
-    tokens.peek().is_some() && tokens.all(|token| Chord::parse(token).is_some())
-}
-
-fn merge_rows(chords: &str, words: &str, fmt: &Formatter) -> Line {
+fn chord_row(mut rest: &str) -> Option<Vec<(usize, &str)>> {
     let mut columns = Vec::new();
-    let mut start = None;
-    for (index, c) in chords.char_indices().chain([(chords.len(), ' ')]) {
-        if c.is_whitespace() {
-            if let Some(from) = start.take() {
-                columns.push((chords[..from].chars().count(), &chords[from..index]));
-            }
-        } else if start.is_none() {
-            start = Some(index);
+    let mut column = 0;
+    let mut has_chord = false;
+    loop {
+        let trimmed = rest.trim_start();
+        column += rest[..rest.len() - trimmed.len()].chars().count();
+        if trimmed.is_empty() {
+            return has_chord.then_some(columns);
         }
+
+        let end = if let Some(comment) = trimmed.strip_prefix('(') {
+            let close = comment.find(')')?;
+            let end = close + 2;
+            if trimmed[end..].starts_with(|c: char| !c.is_whitespace()) {
+                return None;
+            }
+            end
+        } else {
+            let end = trimmed.find(char::is_whitespace).unwrap_or(trimmed.len());
+            Chord::parse(&trimmed[..end])?;
+            has_chord = true;
+            end
+        };
+        let (token, tail) = trimmed.split_at(end);
+        columns.push((column, token));
+        column += token.chars().count();
+        rest = tail;
     }
+}
+
+fn merge_rows(columns: &[(usize, &str)], words: &str, fmt: &Formatter) -> Vec<Part> {
     let text: Vec<char> = words.chars().collect();
     let mut parts = vec![Part {
         chord: None,
@@ -219,7 +303,7 @@ fn merge_rows(chords: &str, words: &str, fmt: &Formatter) -> Line {
             text: text[(*offset).min(text.len())..end].iter().collect(),
         });
     }
-    Line::Lyric { parts }
+    parts
 }
 
 #[derive(Default)]
@@ -276,9 +360,22 @@ fn heading_kind(text: &str) -> &'static str {
     .unwrap_or("comment")
 }
 
+fn set_lyric_color(target: &mut Option<String>, value: &str) {
+    if value.is_empty() {
+        *target = None;
+    } else if value
+        .strip_prefix('#')
+        .is_some_and(|hex| matches!(hex.len(), 3 | 6) && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+        || (value.len() <= 24 && value.bytes().all(|b| b.is_ascii_alphabetic()))
+    {
+        *target = Some(value.into());
+    }
+}
+
 fn parse_blocks(source: &str, fmt: &Formatter) -> Vec<Block> {
     let mut blocks = vec![Block::default()];
     let mut environment = Environment::Normal;
+    let mut style = LyricStyle::default();
     let mut last_chorus: Option<usize> = None;
     let mut lines = source.lines().peekable();
     let open = |blocks: &mut Vec<Block>, label: String, section: &str| {
@@ -299,9 +396,11 @@ fn parse_blocks(source: &str, fmt: &Formatter) -> Vec<Block> {
                     last_chorus = Some(blocks.len() - 1);
                 }
                 environment = env;
+                style = LyricStyle::default();
             } else if is_section_end(key) {
                 environment = Environment::Normal;
                 blocks.push(Block::default());
+                style = LyricStyle::default();
             } else if matches!(key, "chorus") {
                 let recalled = last_chorus.map(|i| blocks[i].lines.clone());
                 let label = if value.is_empty() { "Chorus" } else { value };
@@ -311,6 +410,11 @@ fn parse_blocks(source: &str, fmt: &Formatter) -> Vec<Block> {
                     current.lines.extend(body.into_iter().skip(1));
                 }
                 blocks.push(Block::default());
+                style = LyricStyle::default();
+            } else if matches!(key, "textcolor" | "textcolour") {
+                set_lyric_color(&mut style.color, value);
+            } else if key == "textfill" {
+                set_lyric_color(&mut style.fill, value);
             } else if matches!(
                 key,
                 "c" | "comment" | "ci" | "comment_italic" | "cb" | "comment_box"
@@ -327,6 +431,7 @@ fn parse_blocks(source: &str, fmt: &Formatter) -> Vec<Block> {
                         });
                 } else {
                     open(&mut blocks, value.into(), kind);
+                    style = LyricStyle::default();
                     if kind == "chorus" {
                         last_chorus = Some(blocks.len() - 1);
                     }
@@ -339,36 +444,40 @@ fn parse_blocks(source: &str, fmt: &Formatter) -> Vec<Block> {
             current.lines.push(Line::Pre { text: line.into() });
             continue;
         }
-        let row = if line.starts_with('#') {
+        if line.starts_with('#') {
             continue;
-        } else if line.trim().is_empty() {
-            Line::Space
-        } else if chord_row(line) {
+        }
+        if line.trim().is_empty() {
+            current.lines.push(Line::Space);
+            continue;
+        }
+        let parts = if let Some(columns) = chord_row(line) {
             let next = lines.peek().copied().filter(|next| {
                 !next.trim().is_empty()
                     && !next.contains('[')
                     && directive(next).is_none()
-                    && !chord_row(next)
+                    && chord_row(next).is_none()
             });
             match next {
                 Some(words) => {
                     lines.next();
-                    merge_rows(line, words, fmt)
+                    merge_rows(&columns, words, fmt)
                 }
-                None => Line::Lyric {
-                    parts: line
-                        .split_whitespace()
-                        .map(|s| Part {
-                            chord: Some(fmt.format(s)),
-                            text: " ".into(),
-                        })
-                        .collect(),
-                },
+                None => columns
+                    .into_iter()
+                    .map(|(_, token)| Part {
+                        chord: Some(fmt.format(token)),
+                        text: " ".into(),
+                    })
+                    .collect(),
             }
         } else {
             lyric(line, fmt)
         };
-        current.lines.push(row);
+        current.lines.push(Line::Lyric {
+            parts,
+            style: (style.color.is_some() || style.fill.is_some()).then(|| style.clone()),
+        });
     }
     blocks
 }
@@ -467,4 +576,26 @@ pub fn render(source: &str, shift: i16, flats: bool) -> Vec<Line> {
             ..RenderOptions::default()
         },
     )
+}
+
+/// Distinct chord names in display order, transposed and spelled as the chart shows them but
+/// always in letter notation (Nashville numbers and localized names are not diagram keys), for the diagram strip.
+pub fn song_chords(source: &str, options: &RenderOptions) -> Vec<String> {
+    let letters = RenderOptions {
+        nashville: false,
+        naming: "letter".into(),
+        ..options.clone()
+    };
+    let mut chords: Vec<String> = Vec::new();
+    for line in render_with(source, &letters) {
+        let Line::Lyric { parts, .. } = line else {
+            continue;
+        };
+        for chord in parts.into_iter().filter_map(|p| p.chord) {
+            if Chord::parse(&chord).is_some() && !chords.contains(&chord) {
+                chords.push(chord);
+            }
+        }
+    }
+    chords
 }

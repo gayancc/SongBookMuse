@@ -39,6 +39,11 @@ CREATE TABLE folders (id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER 
 PRAGMA user_version = 2;
 ";
 
+const MIGRATE_V3: &str = "
+ALTER TABLE entries ADD COLUMN section_order TEXT;
+PRAGMA user_version = 3;
+";
+
 pub struct Library(Connection);
 
 impl Library {
@@ -62,7 +67,11 @@ impl Library {
             refresh_summaries(&tx)?;
             version = 2;
         }
-        if version != 2 {
+        if version == 2 {
+            tx.execute_batch(MIGRATE_V3)?;
+            version = 3;
+        }
+        if version != 3 {
             return Err(invalid("This library was created by a newer version"));
         }
         tx.commit()?;
@@ -127,7 +136,8 @@ impl Library {
             .map(|(i, s)| (s.id.to_string(), i))
             .collect();
         let mut stmt = self.0.prepare(
-            "SELECT set_id, id, song_id, transpose, capo, note FROM entries ORDER BY set_id, position",
+            "SELECT set_id, id, song_id, transpose, capo, note, section_order
+             FROM entries ORDER BY set_id, position",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok((
@@ -137,10 +147,11 @@ impl Library {
                 r.get(3)?,
                 r.get(4)?,
                 r.get::<_, Option<String>>(5)?,
+                r.get::<_, Option<String>>(6)?,
             ))
         })?;
         for row in rows {
-            let (set, id, song, transpose, capo, note) = row?;
+            let (set, id, song, transpose, capo, note, section_order) = row?;
             let set = index
                 .get(&set)
                 .ok_or_else(|| invalid("Set entry has no parent set"))?;
@@ -154,6 +165,7 @@ impl Library {
                 transpose,
                 capo,
                 note,
+                section_order,
             });
         }
         sets.sort_by(|a, b| {
@@ -343,8 +355,8 @@ impl Library {
                     let existing: Setlist = serde_json::from_str(&metadata)?;
                     candidate.entries.clear();
                     let mut stmt = tx.prepare(
-                        "SELECT COALESCE(song_id, ''), transpose, capo, note FROM entries
-                        WHERE set_id=?1 ORDER BY position",
+                        "SELECT COALESCE(song_id, ''), transpose, capo, note, section_order
+                         FROM entries WHERE set_id=?1 ORDER BY position",
                     )?;
                     let existing_entries = stmt
                         .query_map([set.id.to_string()], |r| {
@@ -353,6 +365,7 @@ impl Library {
                                 r.get::<_, Option<i16>>(1)?,
                                 r.get::<_, Option<i16>>(2)?,
                                 r.get::<_, Option<String>>(3)?,
+                                r.get::<_, Option<String>>(4)?,
                             ))
                         })?
                         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -362,7 +375,13 @@ impl Library {
                         } else {
                             e.song_id.to_string()
                         };
-                        (song, e.transpose, e.capo, e.note.clone())
+                        (
+                            song,
+                            e.transpose,
+                            e.capo,
+                            e.note.clone(),
+                            e.section_order.clone(),
+                        )
                     });
                     if candidate == existing && existing_entries.into_iter().eq(incoming) {
                         continue;
@@ -384,14 +403,24 @@ impl Library {
                 [serde_json::to_string(&settings)?],
             )?;
         }
+        let mut added_source = false;
         for source in backup.migration_sources {
             let bytes = STANDARD
                 .decode(source.source)
                 .map_err(|_| invalid("Invalid retained source"))?;
-            tx.execute(
+            added_source |= tx.execute(
                 "INSERT OR IGNORE INTO migration_sources VALUES (?1,?2)",
                 params![source.sha256, bytes],
+            )? != 0;
+        }
+        if added_source {
+            // Native backups encode each retained archive separately with Base64 padding.
+            let encoded_size = tx.query_row(
+                "SELECT SUM((length(source) + 2) / 3 * 4) FROM migration_sources",
+                [],
+                |row| row.get::<_, i64>(0),
             )?;
+            backup::validate_migration_source_size(encoded_size)?;
         }
         tx.commit()?;
         Ok(report)
@@ -466,11 +495,27 @@ pub(crate) fn validate_song(s: &Song) -> Result<()> {
 pub(crate) fn validate_settings(s: &Settings) -> Result<()> {
     if !matches!(s.theme.as_str(), "dark" | "light" | "contrast")
         || !(65..=200).contains(&s.scale)
-        || !matches!(s.notation.as_str(), "standard" | "nashville")
+        || !matches!(
+            s.notation.as_str(),
+            "standard" | "nashville" | "german" | "latin"
+        )
         || !matches!(s.layout.as_str(), "fit" | "scroll")
+        || !matches!(s.metronome_timeout.as_str(), "never" | "10s" | "10s_resume")
         || s.autoscroll_delay > 600
+        || !(15..=1800).contains(&s.autoscroll_duration)
     {
         return Err(invalid("Invalid appearance settings"));
+    }
+    if crate::Instrument::parse(&s.instrument).is_none()
+        || !matches!(s.diagram_location.as_str(), "off" | "top" | "inline")
+    {
+        return Err(invalid("Invalid chord diagram settings"));
+    }
+    if s.keyboard_pedals
+        .keys()
+        .any(|key| key.is_empty() || key.len() > 64 || key.chars().any(char::is_control))
+    {
+        return Err(invalid("Invalid keyboard pedal key"));
     }
     Ok(())
 }
@@ -545,7 +590,10 @@ fn write_set(tx: &Transaction<'_>, set: &Setlist) -> Result<()> {
         params![id, serde_json::to_string(&metadata)?],
     )?;
     tx.execute("DELETE FROM entries WHERE set_id=?1", [&id])?;
-    let mut stmt = tx.prepare("INSERT INTO entries VALUES (?1,?2,?3,?4,?5,?6,?7)")?;
+    let mut stmt = tx.prepare(
+        "INSERT INTO entries (id, set_id, song_id, position, transpose, capo, note, section_order)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+    )?;
     for (position, entry) in set.entries.iter().enumerate() {
         validate_entry(entry)?;
         let song = (!entry.is_note()).then(|| entry.song_id.to_string());
@@ -556,7 +604,8 @@ fn write_set(tx: &Transaction<'_>, set: &Setlist) -> Result<()> {
             position as i64,
             entry.transpose,
             entry.capo,
-            entry.note
+            entry.note,
+            entry.section_order,
         ])?;
     }
     Ok(())
@@ -565,6 +614,14 @@ fn write_set(tx: &Transaction<'_>, set: &Setlist) -> Result<()> {
 pub(crate) fn validate_entry(entry: &SetEntry) -> Result<()> {
     if entry.id.is_nil() {
         return Err(invalid("Set entry has no identifier"));
+    }
+    if let Some(order) = &entry.section_order {
+        if entry.is_note() {
+            return Err(invalid("A note item cannot have a section order"));
+        }
+        if order.len() > 4096 {
+            return Err(invalid("Set entry section order exceeds 4096 bytes"));
+        }
     }
     match &entry.note {
         Some(note) if note.len() > 16 * 1024 => Err(invalid("Set note exceeds 16 KiB")),

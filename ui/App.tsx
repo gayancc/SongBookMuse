@@ -3,12 +3,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
-  BookOpen, ChevronLeft, Columns2, Download, Maximize2, Ellipsis, Eye, FolderUp, ListMusic, Minimize, Music2, Pencil, Play,
+  BookOpen, ChevronLeft, Columns2, Download, Maximize2, Ellipsis, Eye, FolderUp, Guitar, ListMusic, Minimize, Music2, Pencil, Play,
   Printer, Radio, ScrollText, Settings2, SkipBack, SkipForward, SlidersHorizontal, Square, Star, StickyNote, Trash2, X
 } from "lucide-react";
 import { BackingTrack } from "./BackingTrack";
 import { Browser, type LibraryFilter } from "./Browser";
 import { Chart, FitChart, type FitLayout } from "./Chart";
+import { ChordStrip, useDiagrams, useSongChords } from "./ChordDiagram";
 import { decode, encode, exportFile, safeName } from "./commands";
 import { DialogError, IconButton, Modal } from "./components";
 import { DocumentView, type InkTool } from "./DocumentView";
@@ -16,9 +17,10 @@ import { Inspector } from "./Inspector";
 import { Metronome } from "./Metronome";
 import { MidiSettings } from "./MidiSettings";
 import {
-  blankSong, defaultSettings, duration, nil, nilEntry, noteEntry,
-  type Folder, type Preview, type SetEntry, type Settings, type Setlist, type Song, type SongSummary, type Stroke
+  blankSong, defaultSettings, duration, nil, nilEntry, noteEntry, notationOptions,
+  type Folder, type NavigationAction, type Preview, type RenderOptions, type SetEntry, type Settings, type Setlist, type Song, type SongSummary, type Stroke
 } from "./model";
+import { PedalSettings, pedalKey } from "./PedalSettings";
 import { Prompt } from "./Prompt";
 import { SetEditor } from "./SetEditor";
 import { SongEditor } from "./SongEditor";
@@ -45,6 +47,7 @@ function shuffled<T>(items: T[]): T[] {
 }
 
 const pad = (n: number): string => String(n).padStart(2, "0");
+const emptyRender: RenderOptions = { shift: 0, flats: false, key: "", nashville: false, key_spelling: true, section_order: "", naming: "letter" };
 
 export function App() {
   const [catalog, setCatalog] = useState<SongSummary[]>([]);
@@ -84,6 +87,8 @@ export function App() {
   const [replace, setReplace] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [savingScrollTime, setSavingScrollTime] = useState(false);
+  const [savingSectionOrder, setSavingSectionOrder] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [menu, setMenu] = useState(false);
   const [printSet, setPrintSet] = useState(false);
@@ -99,7 +104,12 @@ export function App() {
   const shift = entry?.transpose ?? song?.transpose ?? 0;
   const capo = entry?.capo ?? song?.capo ?? 0;
   const locked = Boolean(song?.locked);
-  const autoScroll = useAutoScroll(scroll, song?.duration ?? 0, settings.autoscroll_delay, song?.id ?? "");
+  const scrollDuration = song?.duration || settings.autoscroll_duration;
+  // A tapped tempo plays and shows on the LCD for its song until saved or another song opens.
+  const [tempoDraft, setTempoDraft] = useState<{ song: string; bpm: number } | null>(null);
+  const tempo = tempoDraft && tempoDraft.song === song?.id ? tempoDraft.bpm : song?.tempo ?? 0;
+  const autoScroll = useAutoScroll(scroll, scrollDuration, settings.autoscroll_delay, (song?.id ?? "") + ":" + (entryId ?? ""));
+  const autoScrollLabel = autoScroll.waiting ? "Start auto-scroll now" : autoScroll.running ? "Stop auto-scroll" : "Start auto-scroll";
 
   useEffect(() => {
     if (!notice) return;
@@ -214,15 +224,19 @@ export function App() {
     if (view) view.scrollBy({ top: step * view.clientHeight * (view.dataset.fit === "true" ? 1 : .9) });
   }, [song?.document?.mime, pageCount]);
 
+  const runNavigationAction = useCallback((command: NavigationAction) => {
+    if (command === "next_song" || command === "previous_song") navigate(command === "next_song" ? 1 : -1);
+    else if (command === "page_up" || command === "page_down") stepPage(command === "page_up" ? -1 : 1);
+  }, [navigate, stepPage]);
+
   useEffect(() => {
     let disposed = false;
-    const listener = listen<string>("midi-action", ({ payload }) => {
+    const listener = listen<NavigationAction>("midi-action", ({ payload }) => {
       if (disposed || document.querySelector("dialog[open]")) return;
-      if (payload === "next_song" || payload === "previous_song") navigate(payload === "next_song" ? 1 : -1);
-      else if (payload === "page_up" || payload === "page_down") stepPage(payload === "page_up" ? -1 : 1);
+      runNavigationAction(payload);
     });
     return () => { disposed = true; void listener.then(stop => stop()).catch(() => {}); };
-  }, [navigate, stepPage]);
+  }, [runNavigationAction]);
 
   useEffect(() => {
     function handle(event: KeyboardEvent) {
@@ -230,16 +244,22 @@ export function App() {
       if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || textEntry(event.target) ||
           keyWidget(event.target) || document.querySelector("dialog[open]")) return;
       const onButton = event.target instanceof Element && Boolean(event.target.closest("button"));
+      const key = pedalKey(event);
+      if (key !== null && Object.hasOwn(settings.keyboard_pedals, key) && !(onButton && (key === " " || key === "Enter"))) {
+        event.preventDefault();
+        if (!event.repeat) runNavigationAction(settings.keyboard_pedals[key]);
+        return;
+      }
       if (event.key === "Escape" && perform) togglePerformance();
       else if (event.key === "ArrowLeft" || event.key === "ArrowRight") navigate(event.key === "ArrowLeft" ? -1 : 1);
       else if ((event.key === "PageUp" || event.key === "PageDown" || (event.key === " " && !onButton)) && (song || noteItem)) {
         event.preventDefault();
         stepPage(event.key === "PageUp" || event.shiftKey ? -1 : 1);
-      } else if (event.key.toLowerCase() === "a" && song && !song.document) autoScroll.toggle();
+      } else if (event.key.toLowerCase() === "a" && !event.repeat && song && !song.document) autoScroll.toggle();
     }
     window.addEventListener("keydown", handle);
     return () => window.removeEventListener("keydown", handle);
-  }, [navigate, perform, song, noteItem, stepPage, togglePerformance, autoScroll]);
+  }, [navigate, perform, song, noteItem, stepPage, togglePerformance, autoScroll, settings.keyboard_pedals, runNavigationAction]);
 
   const lookup = useMemo(() => new Map(catalog.map(item => [item.id, item])), [catalog]);
   const visible = useMemo(() => {
@@ -272,12 +292,28 @@ export function App() {
     } else await saveSong({ ...song, [property]: value }, false);
   }
 
+  async function changeSectionOrder(order: string | null) {
+    if (!song || song.locked) return;
+    if (!entry || !currentSet) {
+      await saveSong({ ...song, section_order: order ?? "" }, false);
+      return;
+    }
+    setSavingSectionOrder(true);
+    try {
+      await writeSet({ ...currentSet, entries: currentSet.entries.map(item =>
+        item.id === entry.id ? { ...item, section_order: order } : item) });
+    } finally {
+      setSavingSectionOrder(false);
+    }
+  }
+
   function move(position: number, direction: number) {
     if (!currentSet) return;
     const entries = [...currentSet.entries];
     const other = position + direction;
-    if (other < 0 || other >= entries.length) return;
-    [entries[position], entries[other]] = [entries[other], entries[position]];
+    if (position < 0 || position >= entries.length || other < 0 || other >= entries.length || other === position) return;
+    const [item] = entries.splice(position, 1);
+    entries.splice(other, 0, item);
     void action(async () => { await writeSet({ ...currentSet, entries }); });
   }
 
@@ -338,6 +374,16 @@ export function App() {
     if (song && !song.locked) void action(() => saveSong({ ...song, ink }, false));
   }
 
+  async function changeScrollTime(seconds: number) {
+    if (!song || locked) return;
+    setSavingScrollTime(true);
+    try {
+      await saveSong({ ...song, duration: seconds }, false);
+    } finally {
+      setSavingScrollTime(false);
+    }
+  }
+
   async function exportCurrent() {
     if (!song) return;
     if (song.document) {
@@ -385,18 +431,28 @@ export function App() {
   const lcdTitle = noteItem ? "Note" : song?.title ?? (currentSet ? currentSet.title : "No song loaded");
   const position = index >= 0 && currentSet ? pad(index + 1) + "/" + pad(currentSet.entries.length) : "--/--";
   const fitMode = settings.layout === "fit" && Boolean(song) && !song?.document && !noteItem;
+  const sectionOrder = entry?.section_order ?? song?.section_order ?? "";
+  const renderOptions = song ? { shift: shift - capo, flats: settings.flats, key: song.key, ...notationOptions(settings.notation),
+    key_spelling: settings.key_spelling, section_order: sectionOrder } : null;
+  // Inline popovers are keyed by letter chord names, so other notations show the top strip instead.
+  const diagramLocation = settings.diagram_location === "inline" && settings.notation !== "standard" ? "top" : settings.diagram_location;
+  const showDiagrams = Boolean(song && !song.document) && !lyricsOnly && diagramLocation !== "off";
+  const songChords = useSongChords(song?.source ?? "", renderOptions ?? emptyRender, showDiagrams);
+  const diagrams = useDiagrams(songChords, settings.instrument, showDiagrams);
+  const inlineDiagrams = showDiagrams && diagramLocation === "inline" ? { diagrams, leftHanded: settings.left_handed } : undefined;
   const sheetHeader = useMemo(() => song ? <header className="sheet-header">
     <h2>{song.number > 0 && <span className="song-number">{song.number}</span>}{song.title}</h2>
     {(song.artist || song.subtitle) && <p>{[song.artist, song.subtitle].filter(Boolean).join(" — ")}</p>}
   </header> : null, [song?.number, song?.title, song?.artist, song?.subtitle, song]);
+  const chartHeader = useMemo(() => showDiagrams && diagramLocation === "top"
+    ? <>{sheetHeader}<ChordStrip key={(song?.id ?? "") + settings.instrument} chords={songChords} diagrams={diagrams} leftHanded={settings.left_handed}/></>
+    : sheetHeader, [showDiagrams, diagramLocation, sheetHeader, song?.id, songChords, diagrams, settings.instrument, settings.left_handed]);
   const sheetFooter = song && (song.copyright || song.notes) ? <>
     {song.copyright && <p className="copyright">{song.copyright}</p>}
     {song.notes && <aside className="song-notes"><h3>Notes</h3>{song.notes}</aside>}
   </> : null;
   const fitHint = fitMode && fitInfo ? "Fit to screen: " + fitInfo.columns + (fitInfo.columns === 1 ? " column" : " columns") + " · " +
     Math.round(fitInfo.scale * 100) + "% · " + fitInfo.pages.length + (fitInfo.pages.length === 1 ? " screen" : " screens") : "";
-  const renderOptions = song ? { shift: shift - capo, flats: settings.flats, key: song.key, nashville: settings.notation === "nashville",
-    key_spelling: settings.key_spelling, section_order: song.section_order } : null;
 
   return <DialogError.Provider value={error}><div className="app" data-theme={settings.theme} data-perform={perform} data-surface={surface}
     data-inspector={inspector && Boolean(song)} data-compact={settings.compact_sidebar}
@@ -426,13 +482,17 @@ export function App() {
       <div className="lcd" role="status" aria-label="Song display">
         <span className="lcd-title">{lcdTitle}</span>
         <span className="lcd-cell"><small>Key</small>{displayKey || "--"}{capo > 0 && <em>c{capo}</em>}</span>
-        <span className="lcd-cell"><small>BPM</small>{song?.tempo ? song.tempo : "---"}</span>
+        <span className="lcd-cell"><small>BPM</small>{tempo || "---"}</span>
         <span className="lcd-cell"><small>Sig</small>{song?.time_signature || "4/4"}</span>
         <span className="lcd-cell"><small>Set</small>{position}</span>
       </div>
       <div className="transport-group">
-        <Metronome tempo={song?.tempo ?? 0} beats={Number((song?.time_signature || "4/4").split("/")[0])} onError={report}/>
-        <IconButton label={autoScroll.running ? "Stop auto-scroll (A)" : "Start auto-scroll (A)"} aria-pressed={autoScroll.running}
+        <Metronome tempo={tempo} savedTempo={song?.tempo ?? 0} beats={Number((song?.time_signature || "4/4").split("/")[0])}
+          songKey={(song?.id ?? "") + ":" + (entryId ?? "")} timeout={settings.metronome_timeout} canSave={Boolean(song) && !locked}
+          onTempo={bpm => { if (song) setTempoDraft({ song: song.id, bpm }); }}
+          onSave={bpm => void action(async () => { if (song) { await saveSong({ ...song, tempo: bpm }, false); setTempoDraft(null); } })}
+          onError={report}/>
+        <IconButton label={autoScrollLabel + " (A)"} aria-pressed={autoScroll.running}
           disabled={!song || Boolean(song.document)} onClick={autoScroll.toggle}><ScrollText size={15}/></IconButton>
         <IconButton label="Chromatic tuner" onClick={() => setDialog("tuner")}><Radio size={15}/></IconButton>
         <IconButton label="Settings" onClick={() => setDialog("settings")}><Settings2 size={16}/></IconButton>
@@ -466,6 +526,8 @@ export function App() {
           <span className="toolbar-spacer"/>
           {song && <>
             <IconButton label="Lyrics only" aria-pressed={lyricsOnly} disabled={Boolean(song.document)} onClick={() => setLyricsOnly(!lyricsOnly)}><Eye size={15}/></IconButton>
+            <IconButton label="Chord diagrams" aria-pressed={settings.diagram_location !== "off"} disabled={Boolean(song.document) || lyricsOnly}
+              onClick={() => void action(() => changeSettings({ ...settings, diagram_location: settings.diagram_location === "off" ? "top" : "off" }))}><Guitar size={15}/></IconButton>
             <IconButton label="Fit song to screen" aria-pressed={settings.layout === "fit"} disabled={Boolean(song.document)}
               onClick={() => void action(() => changeSettings({ ...settings, layout: settings.layout === "fit" ? "scroll" : "fit" }))}><Maximize2 size={15}/></IconButton>
             {settings.layout === "scroll" && <IconButton label="Two columns" aria-pressed={settings.columns} disabled={Boolean(song.document)}
@@ -489,7 +551,8 @@ export function App() {
           {noteItem && !perform && <button type="button" onClick={() => setPrompt({ kind: "note", entry: noteItem })}><Pencil size={14}/>Edit note</button>}
           {perform && <button type="button" className="exit-perform" onClick={togglePerformance}><Minimize size={15}/>Exit</button>}
         </div>
-        <div className="sheet-scroll" ref={scroll} data-autoscroll={autoScroll.running} data-fit={fitMode} onTouchStart={e => {
+        <div className="sheet-scroll" ref={scroll} data-autoscroll={autoScroll.running} data-fit={fitMode}
+          data-overscroll={settings.autoscroll_overscroll && !fitMode && Boolean(song && !song.document && !noteItem)} onTouchStart={e => {
           touch.current = e.touches.length === 1 ? [e.touches[0].clientX, e.touches[0].clientY] : null;
         }} onTouchEnd={e => {
           const start = touch.current; touch.current = null;
@@ -502,19 +565,20 @@ export function App() {
             <p className="note-text">{noteItem.note}</p>
           </article> : song && renderOptions && fitMode ? <article className="sheet sheet-fit">
             <FitChart key={song.id} source={song.source} options={renderOptions} lyricsOnly={lyricsOnly} viewport={scroll}
-              header={sheetHeader} footer={sheetFooter} onLayout={setFitInfo}/>
+              inline={inlineDiagrams} header={chartHeader} footer={sheetFooter} onLayout={setFitInfo}/>
           </article> : song && renderOptions && <article className={"sheet" + (settings.columns ? " sheet-columns" : "")} style={{ "--zoom": settings.scale / 100 } as React.CSSProperties}>
-            {sheetHeader}
+            {chartHeader}
             {song.document ? <DocumentView key={song.id} song={song} page={page} setPage={setPage} setPageCount={setPageCount}
-              tool={canDraw ? tool : "none"} brush={brush} width={width} changeInk={ink => { setRedo([]); changeInk(ink); }} onError={report}/> :
-              <Chart source={song.source} options={renderOptions} lyricsOnly={lyricsOnly}/>}
+              invertPdf={settings.invert_pdf} tool={canDraw ? tool : "none"} brush={brush} width={width}
+              changeInk={ink => { setRedo([]); changeInk(ink); }} onError={report}/> :
+              <Chart source={song.source} options={renderOptions} lyricsOnly={lyricsOnly} inline={inlineDiagrams}/>}
             {sheetFooter}
           </article>}
         </div>
         {perform && <footer className="stage-bar">
           <button type="button" aria-label="Previous song" disabled={index <= 0} onClick={() => navigate(-1)}><SkipBack size={20}/></button>
           {pdf && <span className="lcd-inline">{page}/{pageCount}</span>}
-          <button type="button" aria-label={autoScroll.running ? "Stop auto-scroll" : "Start auto-scroll"} aria-pressed={autoScroll.running}
+          <button type="button" aria-label={autoScrollLabel} aria-pressed={autoScroll.running}
             disabled={!song || Boolean(song.document)} onClick={autoScroll.toggle}><ScrollText size={20}/></button>
           <span className="lcd-inline">{position}</span>
           <button type="button" aria-label="Next song" disabled={!currentSet || index < 0 || index >= currentSet.entries.length - 1} onClick={() => navigate(1)}><SkipForward size={20}/></button>
@@ -532,8 +596,10 @@ export function App() {
       inSet={Boolean(entry)} changePitch={(p, v) => void action(() => modifyPitch(p, v))} settings={settings}
       changeSettings={next => void action(() => changeSettings(next))} fitScale={fitMode ? fitInfo?.scale ?? null : null} folders={folders}
       toggleFolder={id => void action(() => saveSong({ ...song, folders: song.folders.includes(id) ? song.folders.filter(f => f !== id) : [...song.folders, id] }, false))}
-      toggleLock={() => void action(() => saveSong({ ...song, locked: !song.locked }, false))} autoScroll={autoScroll}
-      sectionLabels={sectionLabels} changeSectionOrder={order => void action(() => saveSong({ ...song, section_order: order }, false))}
+      toggleLock={() => void action(() => saveSong({ ...song, locked: !song.locked }, false))}
+      scrollSeconds={autoScroll.seconds} savingScrollTime={savingScrollTime} changeScrollTime={seconds => void action(() => changeScrollTime(seconds))}
+      sectionLabels={sectionLabels} sectionOrder={sectionOrder} sectionOrderOverridden={entry?.section_order != null}
+      savingSectionOrder={savingSectionOrder} changeSectionOrder={order => void action(() => changeSectionOrder(order))}
       tool={tool} setTool={setTool} brush={brush} setBrush={setBrush} width={width} setWidth={setWidth}
       undo={song.ink.length && !locked ? () => { setRedo([...redo, song.ink.at(-1)!]); changeInk(song.ink.slice(0, -1)); } : null}
       redo={redo.length && !locked ? () => { changeInk([...song.ink, redo.at(-1)!]); setRedo(redo.slice(0, -1)); } : null}
@@ -567,16 +633,40 @@ export function App() {
           <option value="dark">Studio dark</option><option value="light">Daylight</option><option value="contrast">Stage high contrast</option></select></label>
         <label className="check"><input type="checkbox" checked={settings.compact_sidebar}
           onChange={e => void action(() => changeSettings({ ...settings, compact_sidebar: e.target.checked }))}/>Compact browser rows</label></section>
+      <section className="settings-section"><h3>PDF display</h3>
+        <label className="check"><input type="checkbox" checked={settings.invert_pdf}
+          onChange={e => void action(() => changeSettings({ ...settings, invert_pdf: e.target.checked }))}/>Invert PDF colors</label></section>
       <section className="settings-section"><h3>Chords</h3>
         <label>Chord notation<select value={settings.notation} onChange={e => void action(() => changeSettings({ ...settings, notation: e.target.value as Settings["notation"] }))}>
-          <option value="standard">Letter names</option><option value="nashville">Nashville numbers</option></select></label>
+          <option value="standard">Letter names</option><option value="nashville">Nashville numbers</option>
+          <option value="german">German (H, B)</option><option value="latin">Latin (Do, Re, Mi)</option></select></label>
         <label className="check"><input type="checkbox" checked={settings.key_spelling}
           onChange={e => void action(() => changeSettings({ ...settings, key_spelling: e.target.checked }))}/>Spell transposed chords from the new key</label>
         <label className="check"><input type="checkbox" checked={settings.flats}
           onChange={e => void action(() => changeSettings({ ...settings, flats: e.target.checked }))}/>Prefer flats when the key is unknown or ambiguous</label></section>
+      <section className="settings-section"><h3>Chord diagrams</h3>
+        <label>Instrument<select value={settings.instrument} onChange={e => void action(() => changeSettings({ ...settings, instrument: e.target.value as Settings["instrument"] }))}>
+          <option value="guitar">Guitar (EADGBE)</option><option value="ukulele">Ukulele (GCEA)</option>
+          <option value="mandolin">Mandolin (GDAE)</option><option value="banjo">Banjo (open G)</option></select></label>
+        <label>Chord diagram location<select value={settings.diagram_location} onChange={e => void action(() => changeSettings({ ...settings, diagram_location: e.target.value as Settings["diagram_location"] }))}>
+          <option value="off">Off</option><option value="top">Strip above the chart</option><option value="inline">On chord names (hover or focus)</option></select></label>
+        <label className="check"><input type="checkbox" checked={settings.left_handed}
+          onChange={e => void action(() => changeSettings({ ...settings, left_handed: e.target.checked }))}/>Left handed chord charts</label></section>
+      <section className="settings-section"><h3>Metronome</h3>
+        <label>Stop metronome<select value={settings.metronome_timeout} onChange={e => void action(() => changeSettings({ ...settings, metronome_timeout: e.target.value as Settings["metronome_timeout"] }))}>
+          <option value="never">Never</option><option value="10s">After 10 seconds</option>
+          <option value="10s_resume">After 10 seconds, resume after changing song</option></select></label></section>
       <section className="settings-section"><h3>Auto-scroll</h3>
+        <label>Default scroll time (seconds)<input type="number" min="15" max="1800"
+          onBlur={e => {
+            const seconds = Math.max(15, Math.min(1800, Math.floor(Number(e.target.value) || 90)));
+            if (seconds !== settings.autoscroll_duration) void action(() => changeSettings({ ...settings, autoscroll_duration: seconds }));
+            e.target.value = String(seconds);
+          }} key={settings.autoscroll_duration} defaultValue={settings.autoscroll_duration}/></label>
         <label>Delay before scrolling (seconds)<input type="number" min="0" max="600" value={settings.autoscroll_delay}
-          onChange={e => void action(() => changeSettings({ ...settings, autoscroll_delay: Math.max(0, Math.min(600, Math.floor(Number(e.target.value) || 0))) }))}/></label></section>
+          onChange={e => void action(() => changeSettings({ ...settings, autoscroll_delay: Math.max(0, Math.min(600, Math.floor(Number(e.target.value) || 0))) }))}/></label>
+        <label className="check"><input type="checkbox" checked={settings.autoscroll_overscroll}
+          onChange={e => void action(() => changeSettings({ ...settings, autoscroll_overscroll: e.target.checked }))}/>Overscroll by half a screen</label></section>
       <section className="settings-section"><h3>Library backup</h3>
         <div className="button-row">
           <button onClick={() => void action(async () => {
@@ -586,6 +676,7 @@ export function App() {
           <button onClick={() => backup.current?.click()}><FolderUp size={15}/>Restore backup</button>
         </div>
       </section>
+      <PedalSettings bindings={settings.keyboard_pedals} change={keyboard_pedals => void action(() => changeSettings({ ...settings, keyboard_pedals }))}/>
       <MidiSettings onError={report}/>
     </Modal>}
     {dialog === "backup" && preview && <Modal title="Review backup" close={() => { if (!restoring) setDialog(null); }}>

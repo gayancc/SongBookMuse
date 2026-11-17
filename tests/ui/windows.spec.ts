@@ -174,7 +174,7 @@ test("fits a long song to the screen with columns, pages on a phone, and trailin
   }
   const fontSize = await page.locator(".fit-columns").evaluate(e => parseFloat(getComputedStyle(e).fontSize));
   expect(fontSize).toBeGreaterThanOrEqual(14);
-  await page.mouse.move(5, 5);
+  await sheet.hover({ position: { x: 3, y: 3 } });
   await expect(page.locator("footer.hintbar")).toContainText("1 screen");
   // No row wrapped: every chord sits on the same row as the first chord of its line.
   const wrappedRows = await page.locator(".fit-page .chart-line").evaluateAll(lines => lines.filter(line => {
@@ -200,6 +200,393 @@ test("fits a long song to the screen with columns, pages on a phone, and trailin
   await page.setViewportSize({ width: 1360, height: 820 });
 });
 
+test("shows chord diagrams in fit and scroll layouts and applies instrument and handedness", async () => {
+  await page.setViewportSize({ width: 1360, height: 820 });
+  await page.getByRole("button", { name: "Songs", exact: true }).click();
+  await page.getByRole("button", { name: "New song" }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Diagram drill");
+  await page.getByLabel("Key", { exact: true }).fill("C");
+  await page.getByLabel("Source", { exact: true }).fill("[C]Open [G]strings [Am]ring\n[C]again [Bb]barre");
+  await page.getByRole("button", { name: "Save song" }).click();
+  const fit = page.getByRole("button", { name: "Fit song to screen" });
+  const toggle = page.getByRole("button", { name: "Chord diagrams" });
+  const strip = page.getByRole("region", { name: "Chord diagrams" });
+  if (await fit.getAttribute("aria-pressed") === "false") await fit.click();
+  await expect(strip).toHaveCount(0);
+  await toggle.click();
+  await expect(page.locator(".fit-page").getByRole("region", { name: "Chord diagrams" }).getByRole("img")).toHaveCount(4);
+  const c = strip.getByRole("img", { name: "C on guitar: x 3 2 0 1 0" });
+  await expect(c).toBeVisible();
+  await expect(strip.getByRole("img", { name: "Bb on guitar", exact: false }).locator(".diagram-barre")).toHaveCount(1);
+  const muteX = async () => Number(await c.locator(".diagram-mute").getAttribute("x"));
+  const midpoint = Number((await c.getAttribute("viewBox"))!.split(" ")[2]) / 2;
+  expect(await muteX()).toBeLessThan(midpoint);
+
+  await fit.click();
+  await expect(strip.getByRole("img")).toHaveCount(4);
+  const settings = page.getByRole("button", { name: "Settings" });
+  const dialog = page.getByRole("dialog");
+  const close = page.getByRole("button", { name: "Close dialog" });
+  await settings.click();
+  await dialog.getByRole("checkbox", { name: "Left handed chord charts" }).check();
+  await close.click();
+  await expect.poll(muteX).toBeGreaterThan(midpoint);
+
+  await settings.click();
+  await dialog.getByLabel("Instrument").selectOption("ukulele");
+  await close.click();
+  await expect(strip.getByRole("img", { name: "C on ukulele: 0 0 0 3" })).toBeVisible();
+  await settings.click();
+  await dialog.getByLabel("Chord diagram location").selectOption("inline");
+  await close.click();
+  const chord = page.locator(".chart .chord-inline").filter({ hasText: /^C/ }).first();
+  await chord.focus();
+  await expect(chord.getByRole("img", { name: "C on ukulele: 0 0 0 3" })).toBeVisible();
+
+  await settings.click();
+  await dialog.getByLabel("Instrument").selectOption("guitar");
+  await dialog.getByRole("checkbox", { name: "Left handed chord charts" }).uncheck();
+  await dialog.getByLabel("Chord diagram location").selectOption("off");
+  await close.click();
+  await expect(strip).toHaveCount(0);
+  await fit.click();
+});
+
+test("renames chords in German and Latin notation while diagrams keep letter names", async () => {
+  await page.setViewportSize({ width: 1360, height: 820 });
+  await page.getByRole("button", { name: "Songs", exact: true }).click();
+  await page.getByRole("button", { name: "New song" }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Notation drill");
+  await page.getByLabel("Source", { exact: true }).fill("[C]one [Bb]two [B7]three [F#m/A]four");
+  await page.getByRole("button", { name: "Save song" }).click();
+  const fit = page.getByRole("button", { name: "Fit song to screen" });
+  if (await fit.getAttribute("aria-pressed") === "false") await fit.click();
+  const names = page.locator(".fit-page .chart-part strong");
+  const settings = page.getByRole("button", { name: "Settings" });
+  const dialog = page.getByRole("dialog");
+  const close = page.getByRole("button", { name: "Close dialog" });
+  const notation = async (value: string) => {
+    await settings.click();
+    await dialog.getByLabel("Chord notation").selectOption(value);
+    await close.click();
+  };
+  await expect(names).toHaveText(["C", "Bb", "B7", "F#m/A"]);
+  await notation("german");
+  await expect(names).toHaveText(["C", "B", "H7", "F#m/A"]);
+  await notation("latin");
+  await expect(names).toHaveText(["Do", "Sib", "Si7", "Fa#m/La"]);
+  const toggle = page.getByRole("button", { name: "Chord diagrams" });
+  await toggle.click();
+  await expect(page.getByRole("region", { name: "Chord diagrams" }).getByRole("img", { name: "Bb on guitar", exact: false })).toHaveCount(1);
+  await toggle.click();
+  // The choice persists across a reload.
+  await page.reload();
+  await page.getByRole("button", { name: "Notation drill", exact: false }).first().click();
+  await expect(names.first()).toHaveText("Do");
+  await notation("standard");
+  await expect(names.first()).toHaveText("C");
+});
+
+test("taps a tempo into the metronome, saves it to the song, and auto-stops after ten seconds", async () => {
+  test.setTimeout(60000);
+  await page.setViewportSize({ width: 1360, height: 820 });
+  await page.getByRole("button", { name: "Songs", exact: true }).click();
+  await page.getByRole("button", { name: "New song" }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Tempo partner");
+  await page.getByLabel("Source", { exact: true }).fill("[D]Next one");
+  await page.getByRole("button", { name: "Save song" }).click();
+  await page.getByRole("button", { name: "New song" }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Tempo drill");
+  await page.getByLabel("Source", { exact: true }).fill("[G]Count it in");
+  await page.getByRole("button", { name: "Save song" }).click();
+  await expect(lcd()).toContainText("---");
+
+  // A song without a tempo opens the tempo box on the first start.
+  const metronome = page.getByRole("button", { name: /^(Start|Stop) metronome$/ });
+  await metronome.click();
+  const box = page.getByRole("dialog", { name: "Tempo" });
+  await expect(box).toBeVisible();
+  await metronome.click();
+  await expect(metronome).toHaveAttribute("aria-pressed", "false");
+
+  const pad = box.getByRole("button", { name: "Tap tempo" });
+  const bpm = box.getByLabel("Tempo in BPM");
+  // Taps are timed inside the page: CDP round-trips would add tens of milliseconds to each gap.
+  const tapEvery = (count: number, gap: number) => pad.evaluate((element, [n, ms]) => new Promise<void>(done => {
+    let sent = 0;
+    const press = () => {
+      element.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+      if (++sent < n) setTimeout(press, ms); else done();
+    };
+    press();
+  }), [count, gap] as const);
+  await tapEvery(3, 500);
+  await expect(box.getByText("Keep tapping (3/4)")).toBeVisible();
+  // A pause over two seconds starts a new run, which needs four taps of its own.
+  await page.waitForTimeout(2100);
+  await tapEvery(5, 500);
+  await expect(box.getByText("Tapped 5 beats")).toBeVisible();
+  await expect.poll(async () => Number(await bpm.textContent())).toBeGreaterThanOrEqual(117);
+  expect(Number(await bpm.textContent())).toBeLessThanOrEqual(123);
+  await box.getByRole("button", { name: "Tempo up" }).click();
+  if (process.env.MUSE_UI_SCREENSHOTS) await page.screenshot({ path: "test-results/tempo-box.png", clip: { x: 760, y: 0, width: 600, height: 300 } });
+  const tapped = Number(await bpm.textContent());
+  await expect(lcd()).toContainText(String(tapped));
+  await box.getByRole("button", { name: "Save to song" }).click();
+  await expect(box.getByRole("button", { name: "Save to song" })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await expect(box).toHaveCount(0);
+
+  await page.reload();
+  await page.getByRole("button", { name: "Tempo drill", exact: false }).first().click();
+  await expect(lcd()).toContainText(String(tapped));
+  // A right-click opens the box without starting the click.
+  await metronome.click({ button: "right" });
+  await expect(box).toBeVisible();
+  await expect(metronome).toHaveAttribute("aria-pressed", "false");
+  await box.getByRole("button", { name: "Close tempo" }).click();
+
+  const settings = page.getByRole("button", { name: "Settings" });
+  const timeout = async (value: string) => {
+    await settings.click();
+    await page.getByRole("dialog").getByLabel("Stop metronome").selectOption(value);
+    await page.getByRole("button", { name: "Close dialog" }).click();
+  };
+  await timeout("10s_resume");
+  await metronome.click();
+  await expect(metronome).toHaveAttribute("aria-pressed", "true");
+  await expect(metronome).toHaveAttribute("aria-pressed", "false", { timeout: 13000 });
+  await page.getByRole("button", { name: "Tempo partner", exact: false }).first().click();
+  await expect(metronome).toHaveAttribute("aria-pressed", "true");
+  await metronome.click();
+  await timeout("10s");
+  await page.getByRole("button", { name: "Tempo drill", exact: false }).first().click();
+  await expect(metronome).toHaveAttribute("aria-pressed", "false");
+  await timeout("never");
+});
+
+test("drags a setlist item past several positions and keeps the new order", async () => {
+  await page.getByRole("button", { name: "Setlists", exact: true }).click();
+  await page.getByRole("button", { name: "New setlist" }).click();
+  await page.getByLabel("Name", { exact: true }).fill("Drag ordering");
+  await page.getByRole("button", { name: "Save setlist" }).click();
+  const set = page.getByRole("button", { name: /Drag ordering/ });
+  if (await set.getAttribute("aria-expanded") === "false") await set.click();
+  for (const title of ["First note", "Second note", "Third note"]) {
+    await page.getByRole("button", { name: "Add note item" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel("Note text").fill(title);
+    await dialog.getByRole("button", { name: "Save note" }).click();
+    await expect(dialog).toHaveCount(0);
+  }
+  const entries = page.locator(".set-entry");
+  const names = entries.locator(".entry-title");
+  await expect(names).toHaveText(["First note", "Second note", "Third note"]);
+  await entries.nth(0).locator(".set-entry-handle").dragTo(entries.nth(2));
+  await expect(names).toHaveText(["Second note", "Third note", "First note"]);
+  await page.reload();
+  await page.getByRole("button", { name: "Setlists", exact: true }).click();
+  await set.click();
+  await expect(names).toHaveText(["Second note", "Third note", "First note"]);
+});
+
+test("keeps a section arrangement local to one occurrence of a song", async () => {
+  await page.getByRole("button", { name: "Setlists", exact: true }).click();
+  await page.getByRole("button", { name: "New setlist" }).click();
+  await page.getByLabel("Name", { exact: true }).fill("Arrangement set");
+  await page.getByRole("button", { name: "Save setlist" }).click();
+  await page.getByRole("button", { name: "Songs", exact: true }).click();
+  await page.getByRole("button", { name: "New song" }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Arrangement check");
+  await page.getByLabel("Section order", { exact: true }).fill("Verse 1");
+  await page.getByLabel("Source", { exact: true }).fill(
+    "{start_of_verse: Verse 1}\n[C]First line\n{end_of_verse}\n{start_of_chorus}\n[G]Refrain\n{end_of_chorus}");
+  await page.getByRole("button", { name: "Save song" }).click();
+  const fit = page.getByRole("button", { name: "Fit song to screen" });
+  if (await fit.getAttribute("aria-pressed") === "false") await fit.click();
+  const headings = page.locator(".fit-page .chart-heading");
+  await expect(headings).toHaveText(["Verse 1"]);
+
+  for (let i = 0; i < 2; i++) {
+    await page.getByRole("button", { name: "Song actions" }).click();
+    await page.getByRole("menuitem", { name: "Add to setlist" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Arrangement set" }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+  }
+  await page.getByRole("button", { name: "Setlists", exact: true }).click();
+  const set = page.getByRole("button", { name: /Arrangement set/ });
+  if (await set.getAttribute("aria-expanded") === "false") await set.click();
+  const occurrence = (index: number) => page.getByRole("button", { name: index + " Arrangement check", exact: true });
+  await occurrence(1).click();
+  await page.getByRole("button", { name: "Song details" }).click();
+  const details = page.getByRole("complementary", { name: "Song details" });
+  await details.getByRole("button", { name: "Reset", exact: true }).click();
+  await expect(headings).toHaveText(["Verse 1", "Chorus"]);
+  await details.getByRole("button", { name: "+ Chorus" }).click();
+  await expect(headings).toHaveText(["Chorus"]);
+  await occurrence(2).click();
+  await expect(headings).toHaveText(["Verse 1"]);
+  await page.getByRole("button", { name: "Songs", exact: true }).click();
+  await page.getByRole("button", { name: /Arrangement check Chord sheet/ }).click();
+  await expect(headings).toHaveText(["Verse 1"]);
+
+  await page.reload();
+  await page.getByRole("button", { name: "Setlists", exact: true }).click();
+  await set.click();
+  await occurrence(1).click();
+  await expect(headings).toHaveText(["Chorus"]);
+  await page.getByRole("button", { name: "Song details" }).click();
+  await details.getByRole("button", { name: "Use song order" }).click();
+  await expect(headings).toHaveText(["Verse 1"]);
+});
+
+test("starts delayed auto-scroll on the second press and saves the song scroll time", async () => {
+  await page.setViewportSize({ width: 1360, height: 820 });
+  await page.getByRole("button", { name: "Songs", exact: true }).click();
+  await page.getByRole("button", { name: "All songs", exact: true }).click();
+  await page.getByRole("button", { name: "New song" }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Auto-scroll chart");
+  await page.getByLabel("Source", { exact: true }).fill(Array.from({ length: 70 }, (_, i) => "[G]Line " + (i + 1)).join("\n"));
+  await page.getByRole("button", { name: "Save song" }).click();
+
+  const fit = page.getByRole("button", { name: "Fit song to screen" });
+  const wasFit = await fit.getAttribute("aria-pressed") === "true";
+  if (wasFit) await fit.click();
+  const sheet = page.locator(".sheet-scroll");
+  await expect.poll(() => sheet.evaluate(e => e.scrollHeight - e.clientHeight)).toBeGreaterThan(400);
+  const songDetails = page.getByRole("button", { name: "Song details" });
+  if (await songDetails.getAttribute("aria-pressed") === "false") await songDetails.click();
+  const time = page.getByRole("group", { name: "Scroll time" });
+  await expect(time.locator("output")).toHaveText("1:30");
+  await time.getByRole("button", { name: "Scroll time up" }).click();
+  await expect(time.locator("output")).toHaveText("1:45");
+  await page.getByRole("button", { name: "Close details" }).click();
+
+  await page.getByRole("button", { name: "Start auto-scroll (A)", exact: true }).click();
+  const startNow = page.getByRole("button", { name: "Start auto-scroll now (A)", exact: true });
+  await expect(startNow).toHaveAttribute("aria-pressed", "true");
+  expect(await sheet.evaluate(e => e.scrollTop)).toBe(0);
+  await startNow.click();
+  await expect.poll(() => sheet.evaluate(e => e.scrollTop)).toBeGreaterThan(0);
+  await page.getByRole("button", { name: "Stop auto-scroll (A)", exact: true }).click();
+  await expect(sheet).toHaveAttribute("data-autoscroll", "false");
+
+  await page.getByRole("button", { name: "Auto-scroll chart Chord sheet" }).click();
+  await songDetails.click();
+  await expect(time.locator("output")).toHaveText("1:45");
+  await page.getByRole("button", { name: "Close details" }).click();
+  if (wasFit) await fit.click();
+});
+
+test("uses the default chart scroll time and adds half a viewport below long charts", async () => {
+  await page.getByRole("button", { name: "Songs", exact: true }).click();
+  await page.getByRole("button", { name: "New song" }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Overscroll chart");
+  await page.getByLabel("Source", { exact: true }).fill(Array.from({ length: 80 }, (_, i) => "[D]Overscroll " + i).join("\n"));
+  await page.getByRole("button", { name: "Save song" }).click();
+  const fit = page.getByRole("button", { name: "Fit song to screen" });
+  if (await fit.getAttribute("aria-pressed") === "true") await fit.click();
+  const sheet = page.locator(".sheet-scroll");
+  async function pollSheet() { return sheet.evaluate(e => e.scrollHeight - e.clientHeight); }
+  await expect.poll(pollSheet).toBeGreaterThan(400);
+  const baseline = await pollSheet();
+  const half = await sheet.evaluate(e => e.clientHeight / 2);
+
+  const settings = page.getByRole("button", { name: "Settings", exact: true });
+  await settings.click();
+  await page.getByLabel("Default scroll time (seconds)").fill("120");
+  await page.getByLabel("Default scroll time (seconds)").press("Tab");
+  await page.getByLabel("Overscroll by half a screen").check();
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  await expect.poll(async () => Math.abs(await pollSheet() - baseline - half)).toBeLessThanOrEqual(2);
+
+  await page.reload();
+  await page.getByRole("button", { name: "Overscroll chart Chord sheet" }).click();
+  await expect(sheet).toHaveAttribute("data-overscroll", "true");
+  await page.getByRole("button", { name: "Song details" }).click();
+  await expect(page.getByRole("group", { name: "Scroll time" }).locator("output")).toHaveText("2:00");
+  await page.getByRole("button", { name: "Close details" }).click();
+  await fit.click();
+  await expect(sheet).toHaveAttribute("data-overscroll", "false");
+  await settings.click();
+  await page.getByLabel("Default scroll time (seconds)").fill("90");
+  await page.getByLabel("Default scroll time (seconds)").press("Tab");
+  await page.getByLabel("Overscroll by half a screen").uncheck();
+  await page.getByRole("button", { name: "Close dialog" }).click();
+});
+
+test("shows ChordPro lyric color and fill in the editor and fit viewer", async () => {
+  await page.getByRole("button", { name: "Songs", exact: true }).click();
+  await page.getByRole("button", { name: "New song" }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Color chart");
+  await page.getByLabel("Source", { exact: true }).fill("{c: Verse 1}\n{textcolour: #F00}\n{textfill: yellow}\n[C]Highlighted\n{textcolor}\n[G]Fill only\n{c: Chorus}\n[D]Default lyric");
+  const highlighted = (root: typeof page | ReturnType<typeof page.locator>) => root.getByText("Highlighted", { exact: true });
+  await expect(highlighted(page.getByRole("dialog"))).toHaveCSS("color", "rgb(255, 0, 0)");
+  await page.getByRole("button", { name: "Save song" }).click();
+  const chart = page.locator(".fit-page .chart");
+  await expect(highlighted(chart)).toHaveCSS("background-color", "rgb(255, 255, 0)");
+  await expect(chart.getByText("Fill only", { exact: true })).not.toHaveCSS("color", "rgb(255, 0, 0)");
+  await expect(chart.getByText("Default lyric", { exact: true })).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(chart.getByText("C", { exact: true })).not.toHaveCSS("color", "rgb(255, 0, 0)");
+});
+
+test("learns a keyboard pedal, applies its assigned action, and remembers it after reloading", async () => {
+  await page.setViewportSize({ width: 1360, height: 820 });
+  await page.getByRole("button", { name: "Songs", exact: true }).click();
+  await page.getByRole("button", { name: "All songs", exact: true }).click();
+  await page.getByRole("button", { name: "New song" }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Pedal rehearsal");
+  await page.getByLabel("Source", { exact: true }).fill(Array.from({ length: 70 }, (_, i) => "[G]Line " + (i + 1)).join("\n"));
+  await page.getByRole("button", { name: "Save song" }).click();
+  const fit = page.getByRole("button", { name: "Fit song to screen" });
+  const wasFit = await fit.getAttribute("aria-pressed") === "true";
+  if (wasFit) await fit.click();
+
+  const settings = page.getByRole("button", { name: "Settings" });
+  const close = page.getByRole("button", { name: "Close dialog" });
+  const add = page.getByRole("button", { name: "Add pedal action" });
+  const pedal = page.getByRole("combobox", { name: "p", exact: true });
+  await settings.click();
+  await add.click();
+  await expect(page.getByRole("button", { name: "Press a pedal" })).toBeFocused();
+  await page.keyboard.press("p");
+  await expect(pedal).toHaveValue("page_down");
+  await pedal.selectOption("page_up");
+  await add.click();
+  await page.keyboard.press("p");
+  await expect(page.getByText("p is already assigned")).toBeVisible();
+  await expect(pedal).toHaveValue("page_up");
+  await close.click();
+
+  await page.reload();
+  await page.getByRole("button", { name: "Pedal rehearsal Chord sheet" }).click();
+  const sheet = page.locator(".sheet-scroll");
+  await expect.poll(() => sheet.evaluate(e => e.scrollHeight - e.clientHeight)).toBeGreaterThan(400);
+  await page.keyboard.press("PageDown");
+  await expect.poll(() => sheet.evaluate(e => e.scrollTop)).toBeGreaterThan(0);
+  const before = await sheet.evaluate(e => e.scrollTop);
+
+  const search = page.getByRole("searchbox", { name: "Search songs" });
+  await search.focus();
+  await page.keyboard.press("p");
+  await expect(search).toHaveValue("p");
+  expect(await sheet.evaluate(e => e.scrollTop)).toBe(before);
+  await search.fill("");
+  await settings.click();
+  await expect(pedal).toHaveValue("page_up");
+  await page.keyboard.press("p");
+  expect(await sheet.evaluate(e => e.scrollTop)).toBe(before);
+  await close.click();
+  await page.keyboard.press("p");
+  await expect.poll(() => sheet.evaluate(e => e.scrollTop)).toBeLessThanOrEqual(1);
+
+  await settings.click();
+  await page.getByRole("button", { name: "Remove pedal p" }).click();
+  await expect(pedal).toHaveCount(0);
+  await close.click();
+  if (wasFit) await fit.click();
+});
+
 function pdfFixture() {
   const stream = "0.2 0.4 0.6 rg 25 30 180 90 re f\n";
   const objects = [
@@ -220,7 +607,7 @@ function pdfFixture() {
   return Buffer.from(bytes);
 }
 
-test("renders a PDF and keeps an annotation after reopening", async () => {
+test("renders a PDF, inverts the page without the ink, and keeps both settings and ink after reopening", async () => {
   await page.setViewportSize({ width: 1360, height: 820 });
   await page.getByRole("button", { name: "Songs", exact: true }).click();
   await page.locator("input[type=file][multiple]").setInputFiles({
@@ -230,6 +617,7 @@ test("renders a PDF and keeps an annotation after reopening", async () => {
   const row = page.getByRole("button", { name: "Annotation check PDF" });
   await row.click();
   const canvas = page.getByLabel("PDF page 1");
+  await expect(canvas).toHaveCSS("filter", "none");
   await expect.poll(async () => canvas.evaluate((el: HTMLCanvasElement) => {
     const p = el.getContext("2d")?.getImageData(100,200,1,1).data;
     return p ? Array.from(p) : [];
@@ -240,9 +628,23 @@ test("renders a PDF and keeps an annotation after reopening", async () => {
   await ink.click({ position: { x: 70, y: 100 } });
   await expect(ink.locator("circle")).toHaveCount(1);
   await page.getByRole("button", { name: "Close details" }).click();
+  const settings = page.getByRole("button", { name: "Settings" });
+  const invert = page.getByRole("checkbox", { name: "Invert PDF colors" });
+  await settings.click();
+  await invert.check();
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  await expect(canvas).toHaveCSS("filter", "invert(1)");
+  await expect(ink).toHaveCSS("filter", "none");
+
+  await page.reload();
   await row.click();
+  await expect(canvas).toHaveCSS("filter", "invert(1)");
   await expect(ink.locator("circle")).toHaveCount(1);
   await expect(ink).not.toHaveClass(/enabled/);
+  await settings.click();
+  await invert.uncheck();
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  await expect(canvas).toHaveCSS("filter", "none");
 });
 
 test("loads a local backing track and opens native MIDI port settings", async () => {

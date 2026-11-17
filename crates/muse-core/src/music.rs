@@ -123,6 +123,14 @@ pub fn import_song(name: &str, bytes: &[u8]) -> Result<Song> {
                 "time" => song.time_signature = value.into(),
                 "duration" => song.duration = parse_duration(value).unwrap_or_default(),
                 "copyright" => song.copyright = value.into(),
+                "x_sbp_tags" => {
+                    song.tags = value
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|tag| !tag.is_empty())
+                        .map(str::to_owned)
+                        .collect();
+                }
                 _ => {}
             }
         }

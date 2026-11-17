@@ -54,6 +54,7 @@ export interface SetEntry {
   transpose: number | null;
   capo: number | null;
   note?: string | null;
+  section_order?: string | null;
 }
 
 export interface Setlist {
@@ -70,10 +71,39 @@ export interface Settings {
   columns: boolean;
   flats: boolean;
   compact_sidebar: boolean;
-  notation: "standard" | "nashville";
+  invert_pdf: boolean;
+  keyboard_pedals: Record<string, NavigationAction>;
+  notation: Notation;
+  metronome_timeout: MetronomeTimeout;
   autoscroll_delay: number;
+  autoscroll_duration: number;
+  autoscroll_overscroll: boolean;
   key_spelling: boolean;
   layout: "fit" | "scroll";
+  instrument: Instrument;
+  left_handed: boolean;
+  diagram_location: DiagramLocation;
+}
+
+export type Instrument = "guitar" | "ukulele" | "mandolin" | "banjo";
+export type DiagramLocation = "off" | "top" | "inline";
+
+export const navigationActions = {
+  previous_song: "Previous song", next_song: "Next song", page_up: "Page up", page_down: "Page down",
+};
+export type NavigationAction = keyof typeof navigationActions;
+
+/** Mirrors `muse_core::ChordDiagram`; frets run from the lowest string, `null` = muted. */
+export interface ChordDiagramData {
+  chord: string;
+  instrument: Instrument;
+  strings: string[];
+  fingerings: {
+    frets: (number | null)[];
+    base_fret: number;
+    barre: { fret: number; from: number; to: number } | null;
+    fingers: number;
+  }[];
 }
 
 export interface Preview {
@@ -90,7 +120,8 @@ export interface Preview {
 }
 
 export type ChartLine =
-  | { kind: "lyric"; parts: { chord: string | null; text: string }[] }
+  | { kind: "lyric"; parts: { chord: string | null; text: string }[];
+      style?: { color: string | null; fill: string | null } }
   | { kind: "heading"; text: string; section: string }
   | { kind: "pre"; text: string }
   | { kind: "space" };
@@ -102,6 +133,26 @@ export interface RenderOptions {
   nashville: boolean;
   key_spelling: boolean;
   section_order: string;
+  /** Note naming for letter chords; Nashville numbers ignore it. */
+  naming: Naming;
+}
+
+export type MetronomeTimeout = "never" | "10s" | "10s_resume";
+
+/** Mirrors `muse_core::{TEMPO_MIN, TEMPO_MAX, TAP_MIN}`. */
+export const TEMPO_MIN = 25;
+export const TEMPO_MAX = 300;
+export const TAP_MIN = 4;
+
+export type Notation = "standard" | "nashville" | "german" | "latin";
+export type Naming = "letter" | "german" | "latin";
+
+/** Splits the notation setting into the renderer's Nashville flag and note naming. */
+export function notationOptions(notation: Notation): { nashville: boolean; naming: Naming } {
+  return {
+    nashville: notation === "nashville",
+    naming: notation === "german" || notation === "latin" ? notation : "letter",
+  };
 }
 
 export function blankSong(): Song {
@@ -114,8 +165,9 @@ export function blankSong(): Song {
 }
 
 export const defaultSettings: Settings = {
-  theme: "dark", scale: 100, columns: false, flats: false, compact_sidebar: false,
-  notation: "standard", autoscroll_delay: 10, key_spelling: true, layout: "fit",
+  theme: "dark", scale: 100, columns: false, flats: false, compact_sidebar: false, invert_pdf: false, keyboard_pedals: {},
+  notation: "standard", autoscroll_delay: 10, autoscroll_duration: 90, autoscroll_overscroll: false, key_spelling: true, layout: "fit",
+  instrument: "guitar", left_handed: false, diagram_location: "off", metronome_timeout: "never",
 };
 
 export const nilEntry = (song_id: string): SetEntry => ({ id: nil, song_id, transpose: null, capo: null, note: null });

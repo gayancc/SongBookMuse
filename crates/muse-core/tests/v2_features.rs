@@ -4,7 +4,7 @@ fn chords(lines: &[Line]) -> Vec<String> {
     lines
         .iter()
         .flat_map(|line| match line {
-            Line::Lyric { parts } => parts.iter().filter_map(|p| p.chord.clone()).collect(),
+            Line::Lyric { parts, .. } => parts.iter().filter_map(|p| p.chord.clone()).collect(),
             _ => Vec::new(),
         })
         .collect()
@@ -96,7 +96,7 @@ fn chorus_directive_recalls_the_last_chorus_body() {
     let sung = lines
         .iter()
         .filter(
-            |l| matches!(l, Line::Lyric { parts } if parts.iter().any(|p| p.text.contains("Sing"))),
+            |l| matches!(l, Line::Lyric { parts, .. } if parts.iter().any(|p| p.text.contains("Sing"))),
         )
         .count();
     assert_eq!(sung, 2);
@@ -113,7 +113,7 @@ fn section_order_reorders_and_repeats_labelled_sections() {
         },
     );
     assert_eq!(headings(&lines), ["Chorus", "Verse 2", "Chorus"]);
-    assert!(matches!(&lines[0], Line::Lyric { parts } if parts[0].text == "Intro line"));
+    assert!(matches!(&lines[0], Line::Lyric { parts, .. } if parts[0].text == "Intro line"));
 }
 
 #[test]
@@ -195,6 +195,7 @@ fn note(text: &str) -> SetEntry {
         song_id: Default::default(),
         transpose: None,
         capo: None,
+        section_order: None,
         note: Some(text.into()),
     }
 }
@@ -205,6 +206,7 @@ fn entry(song_id: uuid::Uuid) -> SetEntry {
         song_id,
         transpose: None,
         capo: None,
+        section_order: None,
         note: None,
     }
 }
@@ -275,6 +277,123 @@ fn note_items_round_trip_through_sets_and_native_backups() {
 }
 
 #[test]
+fn set_entry_section_orders_round_trip_and_distinguish_arrangements_on_merge() {
+    let mut db = Library::open(":memory:").unwrap();
+    let mut original = song("Repeated song");
+    original.section_order = "Verse 1, Chorus".into();
+    let song = db.save_song(original).unwrap();
+    let mut reordered = entry(song.id);
+    reordered.section_order = Some("Chorus, Verse 1, Chorus".into());
+    let mut source_order = entry(song.id);
+    source_order.section_order = Some(String::new());
+
+    let mut set = db
+        .save_set(Setlist {
+            title: "Arrangements".into(),
+            entries: vec![entry(song.id), reordered, source_order],
+            ..Setlist::default()
+        })
+        .unwrap();
+    assert_eq!(db.sets().unwrap(), vec![set.clone()]);
+    assert_eq!(
+        db.song(&song.id.to_string()).unwrap().section_order,
+        "Verse 1, Chorus"
+    );
+
+    let mut old_entry = serde_json::to_value(&set.entries[0]).unwrap();
+    old_entry.as_object_mut().unwrap().remove("section_order");
+    assert_eq!(
+        serde_json::from_value::<SetEntry>(old_entry).unwrap(),
+        set.entries[0]
+    );
+
+    let (backup, _) = read_backup(&write_backup(&db).unwrap()).unwrap();
+    let mut restored = Library::open(":memory:").unwrap();
+    restored
+        .restore(backup.clone(), RestoreMode::Replace)
+        .unwrap();
+    assert_eq!(restored.sets().unwrap(), vec![set.clone()]);
+    assert_eq!(
+        restored
+            .restore(backup.clone(), RestoreMode::Merge)
+            .unwrap()
+            .sets,
+        0
+    );
+
+    set.entries[1].section_order = Some("Verse 1".into());
+    restored.save_set(set.clone()).unwrap();
+    assert_eq!(
+        restored.restore(backup, RestoreMode::Merge).unwrap().sets,
+        1
+    );
+    let sets = restored.sets().unwrap();
+    assert!(sets.contains(&set));
+    assert!(
+        sets.iter()
+            .any(|set| set.entries[1].section_order.as_deref() == Some("Chorus, Verse 1, Chorus"))
+    );
+}
+
+#[test]
+fn invalid_set_entry_section_orders_leave_the_existing_set_intact() {
+    let mut db = Library::open(":memory:").unwrap();
+    let song = db.save_song(song("One")).unwrap();
+    let set = db
+        .save_set(Setlist {
+            title: "Set".into(),
+            entries: vec![entry(song.id), note("Welcome")],
+            ..Setlist::default()
+        })
+        .unwrap();
+    for (index, order) in [(0, "x".repeat(4097)), (1, "Verse 1".into())] {
+        let mut invalid = set.clone();
+        invalid.entries[index].section_order = Some(order);
+        assert!(db.save_set(invalid).is_err());
+        assert_eq!(db.sets().unwrap(), vec![set.clone()]);
+    }
+}
+
+#[test]
+fn version_two_library_keeps_existing_entries_and_the_note_constraint() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("v2.sqlite3");
+    let set = {
+        let mut db = Library::open(&path).unwrap();
+        let song = db.save_song(song("One")).unwrap();
+        let mut pitched = entry(song.id);
+        pitched.transpose = Some(2);
+        db.save_set(Setlist {
+            title: "Old set".into(),
+            entries: vec![note("Welcome"), pitched, entry(song.id)],
+            ..Setlist::default()
+        })
+        .unwrap()
+    };
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch("ALTER TABLE entries DROP COLUMN section_order; PRAGMA user_version = 2;")
+        .unwrap();
+
+    let mut db = Library::open(&path).unwrap();
+    assert_eq!(db.sets().unwrap(), vec![set.clone()]);
+    let mut updated = set;
+    updated.entries[1].section_order = Some("Intro, Verse".into());
+    db.save_set(updated.clone()).unwrap();
+    drop(db);
+    assert_eq!(Library::open(&path).unwrap().sets().unwrap(), vec![updated]);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let version: u32 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 3);
+    assert!(
+        conn.execute("UPDATE entries SET note = NULL WHERE song_id IS NULL", [])
+            .is_err()
+    );
+}
+
+#[test]
 fn version_one_library_migrates_entries_and_summaries() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("v1.sqlite3");
@@ -322,6 +441,7 @@ fn version_one_library_migrates_entries_and_summaries() {
     let sets = db.sets().unwrap();
     assert_eq!(sets[0].entries[0].transpose, Some(2));
     assert!(sets[0].entries[0].note.is_none());
+    assert!(sets[0].entries[0].section_order.is_none());
     assert_eq!(db.songs("").unwrap()[0].number, 0);
     assert!(db.folders().unwrap().is_empty());
     // Notes can now be stored in the migrated table.
@@ -374,6 +494,54 @@ fn settings_validate_notation_and_autoscroll_delay() {
 }
 
 #[test]
+fn auto_scroll_settings_validate_and_survive_native_backup() {
+    let library = Library::open(":memory:").unwrap();
+    let mut settings = library.settings().unwrap();
+    assert_eq!(settings.autoscroll_duration, 90);
+    assert!(!settings.autoscroll_overscroll);
+    settings.autoscroll_duration = 0;
+    assert!(library.save_settings(&settings).is_err());
+    settings.autoscroll_duration = 1801;
+    assert!(library.save_settings(&settings).is_err());
+
+    settings.autoscroll_duration = 120;
+    settings.autoscroll_overscroll = true;
+    library.save_settings(&settings).unwrap();
+    let bytes = write_backup(&library).unwrap();
+    let (backup, _) = read_backup(&bytes).unwrap();
+    let mut restored = Library::open(":memory:").unwrap();
+    restored.restore(backup, RestoreMode::Replace).unwrap();
+    assert_eq!(restored.settings().unwrap(), settings);
+}
+
+#[test]
+fn keyboard_pedals_and_pdf_inversion_round_trip_through_native_backup() {
+    let library = Library::open(":memory:").unwrap();
+    let defaults: Settings = serde_json::from_str("{}").unwrap();
+    assert!(defaults.keyboard_pedals.is_empty());
+    assert!(!defaults.invert_pdf);
+    let settings = Settings {
+        keyboard_pedals: [
+            ("PageDown".into(), MidiAction::NextSong),
+            ("p".into(), MidiAction::PageUp),
+        ]
+        .into(),
+        invert_pdf: true,
+        ..defaults
+    };
+    library.save_settings(&settings).unwrap();
+    let mut invalid = settings.clone();
+    invalid
+        .keyboard_pedals
+        .insert("\n".into(), MidiAction::PageDown);
+    assert!(library.save_settings(&invalid).is_err());
+    let (backup, _) = read_backup(&write_backup(&library).unwrap()).unwrap();
+    let mut restored = Library::open(":memory:").unwrap();
+    restored.restore(backup, RestoreMode::Replace).unwrap();
+    assert_eq!(restored.settings().unwrap(), settings);
+}
+
+#[test]
 fn unlabelled_verses_stay_orderable_and_labels_with_commas_match() {
     let source = "[G]Plain verse one
 {soc}
@@ -398,7 +566,7 @@ fn unlabelled_verses_stay_orderable_and_labels_with_commas_match() {
     let text: Vec<String> = lines
         .iter()
         .filter_map(|l| match l {
-            Line::Lyric { parts } => Some(parts.iter().map(|p| p.text.as_str()).collect()),
+            Line::Lyric { parts, .. } => Some(parts.iter().map(|p| p.text.as_str()).collect()),
             _ => None,
         })
         .collect();
@@ -412,4 +580,58 @@ fn unlabelled_verses_stay_orderable_and_labels_with_commas_match() {
             "Chorus line"
         ]
     );
+}
+
+#[test]
+fn german_notation_renames_b_to_h_and_b_flat_to_b() {
+    let german = |shift| RenderOptions {
+        naming: "german".into(),
+        key_spelling: false,
+        flats: true,
+        ..options("", shift)
+    };
+    let lines = render_with("[B]a [Bb7]b [Em/B]c [A#m]d [C]e", &german(0));
+    assert_eq!(chords(&lines), ["H", "B7", "Em/H", "A#m", "C"]);
+    // Transposition goes through the pitch table first: A up 2 is H, G# up 2 is Bb (B).
+    let shifted = render_with("[A]a [Ab]b", &german(2));
+    assert_eq!(chords(&shifted), ["H", "B"]);
+}
+
+#[test]
+fn latin_notation_uses_fixed_do_syllables() {
+    let latin = |shift| RenderOptions {
+        naming: "latin".into(),
+        key_spelling: false,
+        ..options("", shift)
+    };
+    let lines = render_with("[C]a [Dm7]b [Eb]c [F#/A#]d [G]e [A]f [B]g", &latin(0));
+    assert_eq!(
+        chords(&lines),
+        ["Do", "Rem7", "Mib", "Fa#/La#", "Sol", "La", "Si"]
+    );
+    assert_eq!(chords(&render_with("[C]a", &latin(7))), ["Sol"]);
+}
+
+#[test]
+fn localized_notation_keeps_annotations_and_diagram_names_in_letters() {
+    let opts = RenderOptions {
+        naming: "latin".into(),
+        ..options("C", 0)
+    };
+    assert_eq!(chords(&render_with("[*Riff]a [C]b", &opts)), ["Riff", "Do"]);
+    assert_eq!(song_chords("[C]a [G]b", &opts), ["C", "G"]);
+}
+
+#[test]
+fn settings_accept_german_and_latin_notation() {
+    let db = Library::open(":memory:").unwrap();
+    let defaults = db.settings().unwrap();
+    for notation in ["german", "latin"] {
+        let settings = Settings {
+            notation: notation.into(),
+            ..defaults.clone()
+        };
+        db.save_settings(&settings).unwrap();
+        assert_eq!(db.settings().unwrap().notation, notation);
+    }
 }

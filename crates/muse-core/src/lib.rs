@@ -1,20 +1,25 @@
 mod audio;
 mod backup;
 mod chart;
+mod diagrams;
 mod layout;
 mod midi;
 mod music;
 mod store;
+mod tempo;
 
 pub use audio::*;
 pub use backup::*;
 pub use chart::*;
+pub use diagrams::*;
 pub use layout::*;
 pub use midi::*;
 pub use music::*;
 pub use store::*;
+pub use tempo::*;
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -111,6 +116,9 @@ pub struct SetEntry {
     pub song_id: Uuid,
     pub transpose: Option<i16>,
     pub capo: Option<i16>,
+    /// Section order for this occurrence. None keeps the song's order.
+    #[serde(default)]
+    pub section_order: Option<String>,
     /// Text of a note item (reference: `SetItems.ItemType` / `Content`).
     #[serde(default)]
     pub note: Option<String>,
@@ -130,14 +138,25 @@ pub struct Settings {
     pub columns: bool,
     pub flats: bool,
     pub compact_sidebar: bool,
-    /// `standard` or `nashville`.
+    pub invert_pdf: bool,
+    pub keyboard_pedals: BTreeMap<String, MidiAction>,
+    /// `standard`, `nashville`, `german` (H/B) or `latin` (Do-Si).
     pub notation: String,
     /// Seconds before auto-scroll starts moving.
     pub autoscroll_delay: u16,
+    pub autoscroll_duration: u16,
+    pub autoscroll_overscroll: bool,
     /// Spell transposed chords from the target key when the song key is known.
     pub key_spelling: bool,
+    /// Instrument used for chord diagrams.
+    pub instrument: String,
+    pub left_handed: bool,
+    /// `off`, `top` or `inline`.
+    pub diagram_location: String,
     /// `fit` sizes and columns the chart to the screen; `scroll` uses the fixed zoom.
     pub layout: String,
+    /// Metronome auto-stop: `never`, `10s`, or `10s_resume` (runs another 10s after a song change).
+    pub metronome_timeout: String,
 }
 
 impl Default for Settings {
@@ -148,10 +167,18 @@ impl Default for Settings {
             columns: false,
             flats: false,
             compact_sidebar: false,
+            invert_pdf: false,
+            keyboard_pedals: BTreeMap::new(),
             notation: "standard".into(),
             autoscroll_delay: 10,
+            autoscroll_duration: 90,
+            autoscroll_overscroll: false,
             key_spelling: true,
+            instrument: "guitar".into(),
+            left_handed: false,
+            diagram_location: "off".into(),
             layout: "fit".into(),
+            metronome_timeout: "never".into(),
         }
     }
 }

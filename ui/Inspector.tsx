@@ -2,7 +2,6 @@ import { Eraser, Highlighter, Lock, LockOpen, PenLine, Pencil, Redo2, Undo2, X }
 import { IconButton, Stepper } from "./components";
 import type { InkTool } from "./DocumentView";
 import { duration, type Folder, type Settings, type Song } from "./model";
-import type { AutoScroll } from "./useAutoScroll";
 
 interface InspectorProps {
   song: Song;
@@ -18,9 +17,14 @@ interface InspectorProps {
   folders: Folder[];
   toggleFolder: (id: string) => void;
   toggleLock: () => void;
-  autoScroll: AutoScroll;
+  scrollSeconds: number;
+  savingScrollTime: boolean;
+  changeScrollTime: (seconds: number) => void;
   sectionLabels: string[];
-  changeSectionOrder: (order: string) => void;
+  sectionOrder: string;
+  sectionOrderOverridden: boolean;
+  savingSectionOrder: boolean;
+  changeSectionOrder: (order: string | null) => void;
   tool: InkTool;
   setTool: (tool: InkTool) => void;
   brush: string;
@@ -55,9 +59,8 @@ function SectionOrder({ labels, order, change, disabled }: { labels: string[]; o
 }
 
 export function Inspector(props: InspectorProps) {
-  const { song, settings, autoScroll } = props;
+  const { song, settings, scrollSeconds } = props;
   const locked = song.locked;
-  const minutes = Math.floor(autoScroll.seconds / 60) + ":" + String(autoScroll.seconds % 60).padStart(2, "0");
   return <aside className="inspector" aria-label="Song details">
     <div className="panel-head"><h2>Song details</h2>
       <IconButton label={locked ? "Unlock song" : "Lock song"} aria-pressed={locked} onClick={props.toggleLock}>
@@ -79,12 +82,17 @@ export function Inspector(props: InspectorProps) {
       <Stepper label="Zoom" value={settings.scale} min={65} max={200} step={5} disabled={settings.layout === "fit" && !song.document}
         display={settings.layout === "fit" && !song.document ? (props.fitScale ? "Auto " + Math.round(props.fitScale * 100) + "%" : "Auto") : settings.scale + "%"}
         onChange={scale => props.changeSettings({ ...settings, scale })}/>
-      {!song.document && <Stepper label="Scroll time" value={autoScroll.seconds} display={minutes} min={15} max={1800} step={15}
-        onChange={value => props.autoScroll.adjust(value / autoScroll.seconds)}/>}
+      {!song.document && <Stepper label="Scroll time" value={scrollSeconds} display={duration(scrollSeconds)} min={15} max={1800} step={15}
+        disabled={locked || props.savingScrollTime} onChange={props.changeScrollTime}/>}
     </section>
     {!song.document && <section className="rack">
-      <h3>Section order</h3>
-      <SectionOrder labels={props.sectionLabels} order={song.section_order} change={props.changeSectionOrder} disabled={locked}/>
+      <h3>Section order{props.inSet && <small> · this setlist item</small>}</h3>
+      <SectionOrder labels={props.sectionLabels} order={props.sectionOrder} change={props.changeSectionOrder}
+        disabled={locked || props.savingSectionOrder}/>
+      {props.sectionOrderOverridden && <div className="pattern-palette">
+        <button type="button" className="pattern-add" disabled={locked || props.savingSectionOrder}
+          onClick={() => props.changeSectionOrder(null)}>Use song order</button>
+      </div>}
     </section>}
     {song.document && <section className="rack">
       <h3>Annotations</h3>

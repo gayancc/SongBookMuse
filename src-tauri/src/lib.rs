@@ -111,6 +111,32 @@ fn section_labels(source: String) -> Command<Vec<String>> {
 }
 
 #[tauri::command]
+fn chord_diagram(chord: String, instrument: String) -> Command<muse_core::ChordDiagram> {
+    let instrument = muse_core::Instrument::parse(&instrument)
+        .ok_or_else(|| format!("Unknown instrument: {instrument}"))?;
+    muse_core::chord_diagram(&chord, instrument).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn song_chords(source: String, options: RenderOptions) -> Command<Vec<String>> {
+    if source.len() > muse_core::MAX_SOURCE {
+        return Err("Song text exceeds 1 MiB".into());
+    }
+    if options.section_order.len() > 4096 || options.key.len() > 50 {
+        return Err("Section order or key exceeds the supported length".into());
+    }
+    Ok(muse_core::song_chords(&source, &options))
+}
+
+#[tauri::command]
+fn tap_tempo(taps: Vec<f64>) -> Option<u16> {
+    // The UI keeps 16 taps; anything far larger is not a tempo box.
+    (taps.len() <= 64)
+        .then(|| muse_core::tap_tempo(&taps))
+        .flatten()
+}
+
+#[tauri::command]
 fn transpose(chord: String, shift: i16, flats: bool, key_spelling: Option<bool>) -> String {
     if chord.len() > 64 {
         return chord;
@@ -337,6 +363,9 @@ fn run_app() {
             section_labels,
             fit_layout,
             transpose,
+            tap_tempo,
+            chord_diagram,
+            song_chords,
             folders,
             save_folder,
             delete_folder,

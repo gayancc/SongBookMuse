@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { ChartLine, RenderOptions } from "./model";
+import { ChordDiagram } from "./ChordDiagram";
+import type { ChartLine, ChordDiagramData, RenderOptions } from "./model";
 
 interface Block {
   section: string;
@@ -52,38 +53,49 @@ function hasLyrics(line: ChartLine): boolean {
   return line.kind !== "lyric" || line.parts.some(p => p.text.trim());
 }
 
-function Row({ line, lyricsOnly }: { line: ChartLine; lyricsOnly: boolean }) {
+type InlineDiagrams = { diagrams: Map<string, ChordDiagramData>; leftHanded: boolean };
+
+function ChordName({ chord, inline }: { chord: string | null; inline?: InlineDiagrams }) {
+  const diagram = chord ? inline?.diagrams.get(chord) : undefined;
+  if (!diagram || !inline) return <strong>{chord || "\u00a0"}</strong>;
+  return <strong className="chord-inline" tabIndex={0}>
+    {chord}<span className="chord-popover"><ChordDiagram diagram={diagram} leftHanded={inline.leftHanded}/></span>
+  </strong>;
+}
+
+function Row({ line, lyricsOnly, inline }: { line: ChartLine; lyricsOnly: boolean; inline?: InlineDiagrams }) {
   if (line.kind === "space") return <div className="chart-space"/>;
   if (line.kind === "heading") return <p className="chart-comment">{line.text}</p>;
   if (line.kind === "pre") return <pre className="chart-pre">{line.text || " "}</pre>;
   const chords = !lyricsOnly && line.parts.some(p => p.chord);
+  const style = line.style && { color: line.style.color ?? undefined, backgroundColor: line.style.fill ?? undefined };
   return <div className="chart-line">
     {line.parts.map((part, j) => {
       const bare = Boolean(part.chord) && !part.text.trim();
       // A chord with no lyric under it keeps its place on the chord row and gets breathing room.
       return <span className={bare ? "chart-part chord-only" : "chart-part"} key={j}>
-        {chords && <strong>{part.chord || " "}</strong>}
-        {part.text ? <span>{part.text}</span> : chords && <span aria-hidden="true">{" "}</span>}
+        {chords && <ChordName chord={part.chord} inline={inline}/>}
+        {part.text ? <span style={part.text.trim() ? style : undefined}>{part.text}</span> : chords && <span aria-hidden="true">{" "}</span>}
       </span>;
     })}
   </div>;
 }
 
 /** Rows of a block as rendered: an optional heading row followed by its lines. */
-function blockRows(block: Block, lyricsOnly: boolean, start = 0, end = Infinity): ReactNode[] {
+function blockRows(block: Block, lyricsOnly: boolean, inline?: InlineDiagrams, start = 0, end = Infinity): ReactNode[] {
   const rows: ReactNode[] = [];
   const offset = block.heading ? 1 : 0;
   if (block.heading && start === 0) rows.push(<h3 className="chart-heading" key="h">{block.heading}</h3>);
   const from = Math.max(0, start - offset);
   const to = Math.min(block.lines.length, end - offset);
-  for (let i = from; i < to; i++) rows.push(<Row key={i} line={block.lines[i]} lyricsOnly={lyricsOnly}/>);
+  for (let i = from; i < to; i++) rows.push(<Row key={i} line={block.lines[i]} lyricsOnly={lyricsOnly} inline={inline}/>);
   return rows;
 }
 
 function useRenderedLines(source: string, options: RenderOptions): [ChartLine[], string] {
   const [lines, setLines] = useState<ChartLine[]>([]);
   const [error, setError] = useState("");
-  const { shift, flats, key, nashville, key_spelling, section_order } = options;
+  const { shift, flats, key, nashville, key_spelling, section_order, naming } = options;
   const mounted = useRef(false);
   useEffect(() => {
     let obsolete = false;
@@ -91,12 +103,12 @@ function useRenderedLines(source: string, options: RenderOptions): [ChartLine[],
     const delay = mounted.current ? 45 : 0;
     mounted.current = true;
     const timer = setTimeout(() => {
-      void invoke<ChartLine[]>("render", { source, options: { shift, flats, key, nashville, key_spelling, section_order } })
+      void invoke<ChartLine[]>("render", { source, options: { shift, flats, key, nashville, key_spelling, section_order, naming } })
         .then(data => { if (!obsolete) { setLines(data); setError(""); } },
           e => { if (!obsolete) setError(String(e)); });
     }, delay);
     return () => { obsolete = true; clearTimeout(timer); };
-  }, [source, shift, flats, key, nashville, key_spelling, section_order]);
+  }, [source, shift, flats, key, nashville, key_spelling, section_order, naming]);
   return [lines, error];
 }
 
@@ -104,16 +116,17 @@ interface ChartProps {
   source: string;
   options: RenderOptions;
   lyricsOnly?: boolean;
+  inline?: InlineDiagrams;
 }
 
 /** Flowing chart used by the editor preview and the fixed-zoom scroll layout. */
-export function Chart({ source, options, lyricsOnly = false }: ChartProps) {
+export function Chart({ source, options, lyricsOnly = false, inline }: ChartProps) {
   const [lines, error] = useRenderedLines(source, options);
   const blocks = useMemo(() => group(lyricsOnly ? lines.filter(hasLyrics) : lines), [lines, lyricsOnly]);
   if (error) return <p role="alert">{error}</p>;
   return <div className="chart">
     {blocks.map((block, i) => <section key={i} className="chart-block" data-section={block.section}>
-      {blockRows(block, lyricsOnly)}
+      {blockRows(block, lyricsOnly, inline)}
     </section>)}
   </div>;
 }
@@ -167,7 +180,7 @@ function measure(root: HTMLElement): Measurement {
  * Fit-to-screen chart. Sizes and columns are chosen by the Rust layout engine (`fit_layout`) so the
  * whole song shows at the largest readable size, or splits into the fewest screen-sized pages.
  */
-export function FitChart({ source, options, lyricsOnly = false, viewport, header, footer, onLayout }: FitChartProps) {
+export function FitChart({ source, options, lyricsOnly = false, inline, viewport, header, footer, onLayout }: FitChartProps) {
   const [lines, error] = useRenderedLines(source, options);
   const blocks = useMemo(() => group(lyricsOnly ? lines.filter(hasLyrics) : lines), [lines, lyricsOnly]);
   const probe = useRef<HTMLDivElement>(null);
@@ -247,7 +260,7 @@ export function FitChart({ source, options, lyricsOnly = false, viewport, header
   useEffect(() => () => onLayout(null), [onLayout]);
 
   if (error) return <p role="alert">{error}</p>;
-  if (failed) return <div className="fit-fallback">{header}<Chart source={source} options={options} lyricsOnly={lyricsOnly}/>{footer}</div>;
+  if (failed) return <div className="fit-fallback">{header}<Chart source={source} options={options} lyricsOnly={lyricsOnly} inline={inline}/>{footer}</div>;
   return <div className="fit-chart" ref={root}>
     <div className="fit-probe chart" ref={probe} aria-hidden="true">
       <div data-measure-header="" style={{ width: size ? size.width - PAGE_PAD_X * 2 : undefined }}>{header}</div>
@@ -263,7 +276,7 @@ export function FitChart({ source, options, lyricsOnly = false, viewport, header
         {page.map((column, c) => <div className="fit-column" key={c}>
           {column.map(segment => <section key={segment.block + ":" + segment.start} className="chart-block"
             data-section={fitted.blocks[segment.block]?.section} data-continued={segment.start > 0}>
-            {fitted.blocks[segment.block] && blockRows(fitted.blocks[segment.block], lyricsOnly, segment.start, segment.end)}
+            {fitted.blocks[segment.block] && blockRows(fitted.blocks[segment.block], lyricsOnly, inline, segment.start, segment.end)}
           </section>)}
         </div>)}
       </div>

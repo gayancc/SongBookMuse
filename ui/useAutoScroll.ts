@@ -1,60 +1,56 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useState, type RefObject } from "react";
 
 export interface AutoScroll {
   running: boolean;
-  /** Seconds the remaining sheet should take to scroll. */
+  waiting: boolean;
+  /** Seconds to scroll from the top to the bottom of the sheet. */
   seconds: number;
   toggle: () => void;
   stop: () => void;
-  adjust: (factor: number) => void;
 }
 
-const fallbackSeconds = 180;
+type ScrollState = "idle" | "waiting" | "scrolling";
 
-/**
- * Scrolls `target` from its current position to the bottom over the song duration, after a delay.
- * Reference evidence: SongBook Pro exposes "Auto Scroll", "Auto-Scroll Duration" and "Auto-scroll delay".
- */
-export function useAutoScroll(target: RefObject<HTMLElement | null>, duration: number, delay: number, resetKey: string): AutoScroll {
-  const [running, setRunning] = useState(false);
-  const [seconds, setSeconds] = useState(duration > 0 ? duration : fallbackSeconds);
-  const position = useRef(0);
+export function useAutoScroll(target: RefObject<HTMLElement | null>, seconds: number, delay: number, resetKey: string): AutoScroll {
+  const [state, setState] = useState<ScrollState>("idle");
+
+  useEffect(() => setState("idle"), [resetKey]);
 
   useEffect(() => {
-    setRunning(false);
-    setSeconds(duration > 0 ? duration : fallbackSeconds);
-  }, [duration, resetKey]);
+    if (state !== "waiting") return;
+    const timer = window.setTimeout(() => setState("scrolling"), delay * 1000);
+    return () => window.clearTimeout(timer);
+  }, [state, delay]);
 
   useEffect(() => {
     const view = target.current;
-    if (!running || !view) return;
+    if (state !== "scrolling" || !view) return;
     let frame = 0;
-    let previous = 0;
-    const startAt = performance.now() + Math.max(0, delay) * 1000;
-    const duration = Math.max(5, seconds - delay);
-    position.current = view.scrollTop;
+    let previous = performance.now();
+    let position = view.scrollTop;
     const step = (now: number) => {
-      if (now >= startAt) {
-        const elapsed = previous ? (now - previous) / 1000 : 0;
-        // Respect manual scrolling: continue from wherever the performer left the sheet.
-        if (Math.abs(view.scrollTop - position.current) > 2) position.current = view.scrollTop;
-        // Recompute each frame so zoom or column changes mid-song keep the overall timing.
-        const speed = Math.max(1, view.scrollHeight - view.clientHeight) / duration;
-        position.current += speed * elapsed;
-        view.scrollTop = position.current;
-        previous = now;
-        if (view.scrollTop + view.clientHeight >= view.scrollHeight - 1) { setRunning(false); return; }
+      // Recalculate the distance for layout changes and continue from any manual scroll position.
+      if (Math.abs(view.scrollTop - position) > 2) position = view.scrollTop;
+      const distance = Math.max(0, view.scrollHeight - view.clientHeight);
+      position += (distance / seconds) * (Math.max(0, now - previous) / 1000);
+      view.scrollTop = position;
+      previous = now;
+      if (view.scrollTop >= distance - 1) {
+        setState("idle");
+        return;
       }
       frame = requestAnimationFrame(step);
     };
     frame = requestAnimationFrame(step);
     return () => cancelAnimationFrame(frame);
-  }, [running, seconds, delay, target]);
+  }, [state, seconds, target]);
 
-  const toggle = useCallback(() => setRunning(value => !value), []);
-  const stop = useCallback(() => setRunning(false), []);
-  const adjust = useCallback((factor: number) => {
-    setSeconds(value => Math.round(Math.min(1800, Math.max(15, value * factor))));
-  }, []);
-  return useMemo(() => ({ running, seconds, toggle, stop, adjust }), [running, seconds, toggle, stop, adjust]);
+  const toggle = useCallback(() => setState(current => {
+    if (current === "scrolling") return "idle";
+    if (current === "waiting" || delay === 0) return "scrolling";
+    return "waiting";
+  }), [delay]);
+  const stop = useCallback(() => setState("idle"), []);
+  return useMemo(() => ({ running: state !== "idle", waiting: state === "waiting", seconds, toggle, stop }),
+    [state, seconds, toggle, stop]);
 }

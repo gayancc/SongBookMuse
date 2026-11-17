@@ -1,11 +1,12 @@
 import {
-  ArrowDown, ArrowUp, BookOpen, Copy, Folder as FolderIcon, FolderPlus, ListMusic, Lock, Music2, FileText,
+  ArrowDown, ArrowUp, BookOpen, Copy, Folder as FolderIcon, FolderPlus, GripVertical, ListMusic, Lock, Music2, FileText,
   Pencil, Pin, Plus, Printer, Search, Shuffle, Star, StickyNote, Trash2, X
 } from "lucide-react";
 import { IconButton } from "./components";
 import { duration, type Folder, type SetEntry, type Setlist, type SongSummary } from "./model";
 
 export type LibraryFilter = { kind: "all" } | { kind: "favorites" } | { kind: "folder"; id: string };
+const setEntryDrag = "application/x-songbookmuse-set-entry";
 
 interface BrowserProps {
   mode: "songs" | "sets";
@@ -69,8 +70,25 @@ function SetEntryRow({ set, entry, index, props }: { set: Setlist; entry: SetEnt
   const song = props.lookup.get(entry.song_id);
   const label = entry.note != null ? entry.note.split("\n")[0] || "Note" : song?.title ?? "Unavailable song";
   const shift = entry.transpose ?? 0;
-  return <div className="set-entry" data-note={entry.note != null}>
+  return <div className="set-entry" data-note={entry.note != null} onDragOver={event => {
+    if (!event.dataTransfer.types.includes(setEntryDrag)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+  }} onDrop={event => {
+    if (!event.dataTransfer.types.includes(setEntryDrag)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const [setId, entryId] = event.dataTransfer.getData(setEntryDrag).split(":");
+    if (setId !== set.id) return;
+    const from = set.entries.findIndex(item => item.id === entryId);
+    if (from >= 0 && from !== index) props.moveEntry(from, index - from);
+  }}>
     <button aria-current={props.entryId === entry.id ? "true" : undefined} onClick={() => props.openEntry(set, entry)}>
+      <span className="set-entry-handle" aria-hidden="true" title="Drag to reorder" draggable
+        onDragStart={event => {
+          event.dataTransfer.setData(setEntryDrag, set.id + ":" + entry.id);
+          event.dataTransfer.effectAllowed = "move";
+        }}><GripVertical size={13}/></span>
       <span className="step-index">{index + 1}</span>
       {entry.note != null && <StickyNote size={13}/>}
       <span className="entry-title">{label}</span>

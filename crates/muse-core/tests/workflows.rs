@@ -1,4 +1,6 @@
+use base64::{Engine, engine::general_purpose::STANDARD};
 use muse_core::*;
+use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
 fn chart(title: &str, body: &str) -> Song {
@@ -7,6 +9,47 @@ fn chart(title: &str, body: &str) -> Song {
         format!("{{title: {title}}}\n{{artist: Trio}}\n{{duration: 2:37}}\n{body}").as_bytes(),
     )
     .unwrap()
+}
+
+#[test]
+fn merge_keeps_retained_sources_within_the_native_backup_budget() {
+    fn provenance(bytes: &[u8]) -> MigrationSource {
+        MigrationSource {
+            sha256: format!("{:x}", Sha256::digest(bytes)),
+            source: STANDARD.encode(bytes),
+        }
+    }
+
+    let mut library = Library::open(":memory:").unwrap();
+    let source = provenance(&vec![0; 36 * 1024 * 1024]);
+    let original = Backup {
+        songs: vec![],
+        sets: vec![],
+        folders: vec![],
+        settings: None,
+        migration_sources: vec![source.clone()],
+    };
+    library
+        .restore(original.clone(), RestoreMode::Merge)
+        .unwrap();
+    library.restore(original, RestoreMode::Merge).unwrap();
+
+    let extra = Backup {
+        songs: vec![chart("Incoming song", "[C]New")],
+        sets: vec![],
+        folders: vec![],
+        settings: None,
+        migration_sources: vec![provenance(b"new archive")],
+    };
+    let error = library.restore(extra, RestoreMode::Merge).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Retained migration sources exceed 36 MiB"
+    );
+    assert!(library.songs("").unwrap().is_empty());
+    let bytes = write_backup(&library).unwrap();
+    let (restored, _) = read_backup(&bytes).unwrap();
+    assert_eq!(restored.migration_sources, vec![source]);
 }
 
 #[test]
@@ -28,10 +71,10 @@ fn notation_preserves_quality_and_transposes_bass() {
     );
     assert!(matches!(&lines[0], Line::Heading { text, .. } if text == "Chorus"));
     assert!(
-        matches!(&lines[1], Line::Lyric { parts } if parts[0].chord.as_deref() == Some("Bm") && parts[2].chord.as_deref() == Some("spoken"))
+        matches!(&lines[1], Line::Lyric { parts, .. } if parts[0].chord.as_deref() == Some("Bm") && parts[2].chord.as_deref() == Some("spoken"))
     );
     assert!(
-        matches!(&lines[2], Line::Lyric { parts } if parts[0].text == "你好" && parts[1].text == " wor")
+        matches!(&lines[2], Line::Lyric { parts, .. } if parts[0].text == "你好" && parts[1].text == " wor")
     );
 }
 
@@ -59,6 +102,7 @@ fn library_reopens_searches_and_keeps_repeated_ordered_entries() {
                     song_id,
                     transpose: None,
                     capo: None,
+                    section_order: None,
                     note: None,
                 })
                 .collect(),
@@ -103,6 +147,7 @@ fn own_backup_preserves_document_annotation_settings_and_rejects_invalid_replace
                 song_id: song.id,
                 transpose: Some(-2),
                 capo: Some(1),
+                section_order: None,
                 note: None,
             }],
             ..Setlist::default()
@@ -199,6 +244,107 @@ fn synthetic_sbp_rejects_bad_checksum_and_unsafe_members() {
             .unwrap_err()
             .to_string()
             .contains("Unsafe archive")
+    );
+}
+
+#[test]
+fn original_backup_rejects_duplicate_central_directory_members() {
+    use std::io::{Cursor, Write};
+
+    let alias = b"fakeFile.txt";
+    let data = b"1.0\r\n{\"songs\":[],\"sets\":[],\"folders\":[]}";
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default();
+    writer.set_comment("Archive comment");
+    writer.start_file("fakeFile.txt", options).unwrap();
+    writer.write_all(b"Invalid earlier content").unwrap();
+    writer.start_file("dataFile.txt", options).unwrap();
+    writer.write_all(data).unwrap();
+    writer.start_file("dataFile.hash", options).unwrap();
+    write!(writer, "{:x}", md5::Md5::digest(data)).unwrap();
+    let mut extra = zip::write::FileOptions::<zip::write::ExtendedFileOptions>::default();
+    extra
+        .add_extra_data(0xface, Box::from(*b"extra"), true)
+        .unwrap();
+    writer.start_file("métadata", extra).unwrap();
+    let mut archive = writer.finish().unwrap().into_inner();
+    assert!(read_backup(&archive).is_ok());
+
+    // Rename both local and central names without changing either header length.
+    let aliases: Vec<_> = archive
+        .windows(alias.len())
+        .enumerate()
+        .filter_map(|(offset, name)| (name == alias).then_some(offset))
+        .collect();
+    assert_eq!(aliases.len(), 2);
+    for offset in aliases {
+        archive[offset..offset + alias.len()].copy_from_slice(b"dataFile.txt");
+    }
+    assert!(
+        read_backup(&archive)
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate members")
+    );
+}
+
+#[test]
+fn original_folder_records_restore_with_song_memberships() {
+    use std::io::{Cursor, Write};
+
+    let data = concat!(
+        "1.0\r\n",
+        r#"{"songs":[
+            {"Id":1,"name":"Existing","type":1,"content":"[C]First","_folders":"[11]"},
+            {"Id":2,"name":"Incoming","type":1,"content":"[D]Second","_folders":"[22,11,99]"},
+            {"Id":3,"name":"Unmapped","type":1,"content":"[E]Third","_folders":{"id":11}}
+        ],"sets":[],"folders":[
+            {"Id":11,"Name":"Second folder","Order":2,"Deleted":0},
+            {"Id":22,"Name":"First folder","Order":1,"Deleted":0}
+        ]}"#,
+    );
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default();
+    writer.start_file("dataFile.txt", options).unwrap();
+    writer.write_all(data.as_bytes()).unwrap();
+    writer.start_file("dataFile.hash", options).unwrap();
+    write!(writer, "{:x}", md5::Md5::digest(data)).unwrap();
+    let bytes = writer.finish().unwrap().into_inner();
+    let (backup, preview) = read_backup(&bytes).unwrap();
+    assert!(
+        preview
+            .warnings
+            .iter()
+            .any(|w| w.contains("Some folder memberships"))
+    );
+    let mut replaced = Library::open(":memory:").unwrap();
+    replaced
+        .restore(backup.clone(), RestoreMode::Replace)
+        .unwrap();
+    let folders = replaced.folders().unwrap();
+    assert_eq!(folders[0].name, "First folder");
+    assert_eq!(folders[1].name, "Second folder");
+    assert_eq!(
+        replaced.songs("Existing").unwrap()[0].folders,
+        [folders[1].id]
+    );
+    assert_eq!(
+        replaced.songs("Incoming").unwrap()[0].folders,
+        [folders[0].id, folders[1].id]
+    );
+    assert!(replaced.songs("Unmapped").unwrap()[0].folders.is_empty());
+
+    let mut merged = Library::open(":memory:").unwrap();
+    let mut existing = import_song("Existing.pro", b"[C]First").unwrap();
+    existing.notes = "Preserved".into();
+    merged.save_song(existing.clone()).unwrap();
+    let report = merged.restore(backup, RestoreMode::Merge).unwrap();
+    assert_eq!((report.songs, report.reused), (2, 1));
+    assert_eq!(merged.song(&existing.id.to_string()).unwrap(), existing);
+    assert_eq!(merged.folders().unwrap(), folders);
+    assert_eq!(
+        merged.songs("Incoming").unwrap()[0].folders,
+        [folders[0].id, folders[1].id]
     );
 }
 

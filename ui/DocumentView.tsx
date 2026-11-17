@@ -12,6 +12,7 @@ interface DocumentViewProps {
   page: number;
   setPage: (n: number) => void;
   setPageCount: (n: number) => void;
+  invertPdf: boolean;
   tool: InkTool;
   brush: string;
   width: number;
@@ -24,7 +25,7 @@ function touches(stroke: Stroke, [x, y]: [number, number], radius: number): bool
   return stroke.points.some(([px, py]) => Math.hypot(px - x, py - y) <= radius + stroke.width);
 }
 
-export function DocumentView({ song, page, setPage, setPageCount, tool, brush, width, changeInk, onError }: DocumentViewProps) {
+export function DocumentView({ song, page, setPage, setPageCount, invertPdf, tool, brush, width, changeInk, onError }: DocumentViewProps) {
   const draw = tool !== "none";
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [image, setImage] = useState("");
@@ -87,7 +88,7 @@ export function DocumentView({ song, page, setPage, setPageCount, tool, brush, w
       <IconButton label="Next page" disabled={page >= pdf.numPages} onClick={() => setPage(page + 1)}><ChevronRight size={18}/></IconButton>
     </nav>}
     <div className="document">
-      {song.document?.mime === "application/pdf" ? <canvas ref={canvas} aria-label={"PDF page " + page}/> :
+      {song.document?.mime === "application/pdf" ? <canvas ref={canvas} data-inverted={invertPdf} aria-label={"PDF page " + page}/> :
         image && <img src={image} alt={song.title} onError={() => onError("This image could not be decoded")}/>}
       <svg className={draw ? "ink enabled" : "ink"} data-tool={tool} aria-hidden="true" viewBox="0 0 1000 1000" preserveAspectRatio="none"
         onPointerDown={event => {
