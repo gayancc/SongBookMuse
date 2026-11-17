@@ -8,6 +8,8 @@ let child: ChildProcess;
 let data: string;
 let browser: Browser;
 let page: Page;
+/** The app page, not the startup splash (both are served from tauri.localhost). */
+const isMain = (url: string) => url.includes("tauri.localhost") && !url.includes("splash");
 
 test.skip(process.platform !== "win32", "This suite drives the Windows WebView2 binary.");
 test.beforeAll(async () => {
@@ -30,10 +32,10 @@ test.beforeAll(async () => {
   await expect.poll(async () => {
     const response = await fetch(endpoint + "/json/list").catch(() => null);
     const pages = response?.ok ? await response.json() : [];
-    return pages.some((target: { url: string }) => target.url.includes("tauri.localhost"));
+    return pages.some((target: { url: string }) => isMain(target.url));
   }, { timeout: 25000 }).toBe(true);
   browser = await chromium.connectOverCDP(endpoint);
-  page = browser.contexts()[0].pages().find(p => p.url().includes("tauri.localhost"))!;
+  page = browser.contexts()[0].pages().find(p => isMain(p.url()))!;
   await expect(page.getByRole("complementary", { name: "Library browser" })).toBeVisible();
 });
 
@@ -907,4 +909,12 @@ test("draws its own window controls and blocks the browser context menu", async 
     return event.defaultPrevented;
   });
   expect(blocked).toBe(true);
+});
+
+test("shows the main window after the splash and closes the splash", async () => {
+  await expect.poll(() => page.evaluate(() => document.visibilityState), { timeout: 25000 }).toBe("visible");
+  await expect.poll(async () => {
+    const targets: { url: string }[] = await (await fetch("http://127.0.0.1:19220/json/list")).json();
+    return targets.some(target => target.url.includes("splash"));
+  }, { timeout: 25000 }).toBe(false);
 });

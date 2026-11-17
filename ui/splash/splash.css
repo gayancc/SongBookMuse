@@ -1,0 +1,43 @@
+/* Startup splash: the mark floats on the desktop (transparent window, no panel, no frame), drifts slowly
+   smaller while the app loads and dissolves with a blur when the main window is ready — the startup
+   behaviour observed in FL Studio 2025 — with SongBookMuse's own animated equalizer mark. */
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+body { font-family: 'DM Sans Variable', system-ui, sans-serif; -webkit-font-smoothing: antialiased; user-select: none; cursor: default; }
+
+.stage { position: relative; width: 100%; height: 100%; display: grid; place-items: center; align-content: center; gap: 14px;
+  animation: drift 3.2s cubic-bezier(.3, 0, .2, 1) forwards; }
+.stage[data-exit="true"] { animation: dissolve .45s ease-in forwards; }
+.field { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+
+.mark { position: relative; width: 196px; height: 196px; filter: drop-shadow(0 14px 22px #000a) drop-shadow(0 2px 4px #0008);
+  animation: arrive .7s cubic-bezier(.2, 1.4, .4, 1) both; }
+.disc { width: 100%; height: 100%; overflow: visible; }
+.rim { stroke: #ffffff1c; stroke-width: 2; }
+.bar { fill: url(#bar-face); transform-box: fill-box; transform-origin: 50% 100%; transform: scaleY(0);
+  animation: rise .5s cubic-bezier(.2, 1.5, .5, 1) forwards; }
+.bar:nth-of-type(1) { animation-delay: .32s; }
+.bar:nth-of-type(2) { animation-delay: .44s; }
+.bar:nth-of-type(3) { animation-delay: .56s; }
+.sheen { animation: sheen 2.6s ease-in-out .9s infinite; }
+.sweep { stroke: #f5a03a; stroke-width: 3; stroke-linecap: round; stroke-dasharray: 18 82; transform-origin: 128px 128px;
+  filter: drop-shadow(0 0 4px #f5a03a); opacity: 0; animation: fade-in .4s ease-out .7s forwards, spin 1.5s linear .7s infinite; }
+
+.wordmark { margin: 0; font-size: 22px; letter-spacing: .2em; color: #e9edf0; text-shadow: 0 2px 8px #000c; white-space: nowrap;
+  animation: title .8s cubic-bezier(.2, .8, .2, 1) .5s both; }
+.wordmark b { color: #f5a03a; font-weight: 800; }
+
+@keyframes drift { from { transform: scale(1); } to { transform: scale(.965); } }
+@keyframes dissolve { to { opacity: 0; filter: blur(8px); transform: scale(.94); } }
+@keyframes arrive { from { opacity: 0; transform: scale(.55) rotate(-14deg); filter: blur(10px); } }
+@keyframes rise { to { transform: scaleY(1); } }
+@keyframes sheen { 0% { transform: skewX(-18deg) translateX(0); } 55%, 100% { transform: skewX(-18deg) translateX(420px); } }
+@keyframes fade-in { to { opacity: 1; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes title { from { opacity: 0; letter-spacing: .6em; transform: translateY(8px); filter: blur(4px); } to { letter-spacing: .02em; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .stage, .mark, .bar, .sheen, .sweep, .wordmark { animation: none !important; }
+  .bar { transform: none; }
+  .sweep { opacity: 1; }
+  .stage[data-exit="true"] { opacity: 0; }
+}

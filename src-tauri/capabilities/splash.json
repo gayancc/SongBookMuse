@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "splash",
+  "description": "Startup splash: only listens for the signal to dissolve",
+  "windows": ["splash"],
+  "platforms": ["windows", "macOS", "linux"],
+  "permissions": ["core:event:default"]
+}

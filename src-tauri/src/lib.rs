@@ -1,4 +1,5 @@
 mod midi;
+mod startup;
 
 use muse_core::{
     Backup, BackupPreview, FitLayout, FitRequest, Folder, Library, Line, MidiBinding,
@@ -380,6 +381,7 @@ fn run_app() {
                 pending: Mutex::new(None),
                 midi: Mutex::new(midi::Midi::default()),
             });
+            startup::begin(app)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -412,7 +414,8 @@ fn run_app() {
             midi_connect,
             midi_open_song,
             prepare_track,
-            detect_pitch
+            detect_pitch,
+            startup::app_ready
         ])
         .run(tauri::generate_context!())
         .expect("SongBookMuse could not start");

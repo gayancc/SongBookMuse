@@ -159,6 +159,9 @@ export function App() {
       await refresh();
       setSettings({ ...defaultSettings, ...await invoke<Settings>("settings") });
       setLoaded(true);
+    }).finally(() => {
+      // The main window stays hidden behind the splash until the first load settles (errors included).
+      void invoke("app_ready").catch(() => {});
     });
   }, [action, refresh]);
 

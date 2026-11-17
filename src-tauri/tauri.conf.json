@@ -10,7 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "label": "main", "title": "SongBookMuse", "width": 1360, "height": 870, "minWidth": 340, "minHeight": 500, "dragDropEnabled": false, "decorations": false }],
+    "windows": [{ "label": "main", "title": "SongBookMuse", "width": 1360, "height": 870, "minWidth": 340, "minHeight": 500, "dragDropEnabled": false, "decorations": false, "visible": false, "backgroundColor": "#171b1e" }],
     "security": {
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self'; worker-src 'self' blob:; connect-src ipc: http://ipc.localhost; media-src 'self' blob: data:"
     }
