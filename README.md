@@ -24,7 +24,9 @@ To publish a new alpha, create a GitHub release whose tag contains `alpha` (for 
 
 ## Run on Windows
 
-Double-click [Run-SongBookMuse.bat](Run-SongBookMuse.bat). It opens an existing build or builds the app on first launch.
+Double-click [run.bat](run.bat). Choose **Run** to open the newest local build or **Build and run** to build from the current source and open it. **Run** builds the app if no local executable exists.
+
+From PowerShell, use `.\run.bat run` or `.\run.bat build` to skip the menu.
 
 Use current stable Rust with MSVC, Node.js 22.13 or newer, and WebView2. Install any remaining Windows dependencies from the [Tauri setup guide](https://v2.tauri.app/start/prerequisites/).
 
