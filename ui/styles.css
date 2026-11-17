@@ -58,7 +58,7 @@ button:hover:not(:disabled) { background: linear-gradient(color-mix(in srgb, var
 button:active:not(:disabled) { background: var(--well); box-shadow: inset 0 1px 3px #0008; }
 button[aria-pressed="true"], button[aria-current="true"], button[aria-checked="true"] {
   color: var(--accent-hi); background: linear-gradient(var(--selection), color-mix(in srgb, var(--selection), black 18%));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent), transparent 55%);
+  box-shadow: inset 0 1px 2px #0006;
 }
 .primary { background: linear-gradient(var(--accent-hi), var(--accent)); color: var(--on-accent); font-weight: 700; border-color: color-mix(in srgb, var(--accent), black 40%); }
 .primary:hover:not(:disabled) { background: linear-gradient(#ffd08e, var(--accent-hi)); }
@@ -112,7 +112,7 @@ label { font-size: 12px; color: var(--soft); display: flex; flex-direction: colu
   font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; }
 .tap-pad output { font-size: 38px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; text-shadow: 0 0 8px color-mix(in srgb, var(--lcd-fg), transparent 45%); }
 .tap-pad small { font-size: 10px; color: var(--lcd-dim); }
-.tap-pad:active { box-shadow: inset 0 2px 8px #000c, 0 0 0 2px var(--accent); }
+.tap-pad:active { box-shadow: inset 0 2px 8px #000c; }
 .tap-hint { margin: 0; font-size: 11px; color: var(--quiet); text-align: center; }
 .tempo-nudge { display: grid; grid-template-columns: 34px 34px 1fr; gap: 6px; }
 
@@ -151,7 +151,6 @@ label { font-size: 12px; color: var(--soft); display: flex; flex-direction: colu
 .app[data-compact="true"] .row-text small { display: none; }
 .row-strip { align-self: stretch; width: 4px; border-radius: 0 2px 2px 0; background: var(--bevel); }
 .song-row[data-keyed="true"] .row-strip { background: hsl(var(--row-hue) 55% 55%); }
-.set-row .row-strip { background: var(--accent); }
 .row-number { min-width: 22px; text-align: right; font-size: 11px; color: var(--quiet); font-variant-numeric: tabular-nums; }
 .row-text { display: grid; min-width: 0; flex: 1; gap: 1px; }
 .row-text strong, .row-text small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
@@ -215,7 +214,7 @@ label { font-size: 12px; color: var(--soft); display: flex; flex-direction: colu
 .chart-space { height: .7em; }
 .sheet-columns .chart { columns: 2 260px; column-gap: 36px; }
 .song-notes, .copyright { color: var(--ink-soft); margin-top: 22px; white-space: pre-wrap; }
-.song-notes { padding: 10px 12px; border-left: 3px solid var(--accent); background: #0000001f; }
+.song-notes { padding: 10px 12px; background: #0000001f; }
 .song-notes h3 { font-size: 12px; margin-bottom: 4px; }
 .copyright { font-size: 11px; }
 .note-sheet .sheet-header { display: flex; align-items: center; gap: 10px; color: var(--accent); }
@@ -389,7 +388,7 @@ fieldset { margin: 12px 0; border: 1px solid var(--edge); border-radius: var(--r
 .sheet-fit .diagram-cell { flex: none; }
 .diagram-cell { padding: 2px; min-height: 0; background: var(--paper); border-color: color-mix(in srgb, var(--ink-soft), transparent 70%); box-shadow: none; }
 .diagram-cell:disabled { opacity: 1; cursor: default; }
-.diagram-cell:hover:not(:disabled) { background: var(--paper); border-color: var(--accent); }
+.diagram-cell:hover:not(:disabled) { background: color-mix(in srgb, var(--paper), white 6%); }
 .chord-diagram { display: block; width: calc(62px * var(--zoom, 1)); height: auto; overflow: visible; }
 .diagram-name { fill: var(--chord); font-size: 9px; font-weight: 750; text-anchor: middle; }
 .diagram-base { fill: var(--ink-soft); font-size: 6.5px; font-variant-numeric: tabular-nums; }
@@ -402,6 +401,6 @@ fieldset { margin: 12px 0; border: 1px solid var(--edge); border-radius: var(--r
 .diagram-mute { fill: var(--ink-soft); font-size: 8px; text-anchor: middle; }
 .chord-inline { position: relative; cursor: help; border-bottom: 1px dotted color-mix(in srgb, var(--chord), transparent 50%); }
 .chord-popover { display: none; position: absolute; z-index: 5; left: 0; bottom: calc(100% + 4px); padding: 4px; border-radius: var(--radius);
-  background: var(--paper); border: 1px solid var(--accent); box-shadow: 0 6px 18px #0006; font-size: 13px; }
+  background: var(--paper); border: 1px solid var(--edge); box-shadow: 0 6px 18px #0006; font-size: 13px; }
 .chord-inline:hover .chord-popover, .chord-inline:focus .chord-popover { display: block; }
 @media print { .diagram-strip { border-color: #000 !important; background: none !important; } .diagram-dot, .diagram-barre { fill: #000 !important; } .chord-popover { display: none !important; } }

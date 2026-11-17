@@ -1,0 +1,113 @@
+/* Song editor: one-row identity strip, slim property column, source and live preview, status footer.
+   The work area (source + preview) gets every pixel the properties do not need. */
+
+dialog.editor-window { width: min(97vw, 1320px); height: min(94dvh, 860px); max-width: 97vw; }
+dialog.editor-window[open] { display: flex; flex-direction: column; }
+dialog.editor-window > .modal-body { padding: 0; flex: 1; min-height: 0; display: flex; }
+.song-editor { flex: 1; min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
+.song-editor label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--quiet); gap: 2px; }
+.song-editor input, .song-editor textarea { font-size: 12.5px; text-transform: none; letter-spacing: normal; color: var(--fg); }
+.song-editor input[aria-invalid="true"] { border-color: var(--alert); box-shadow: 0 0 0 1px var(--alert); }
+
+/* Identity strip: one row, placeholders instead of field captions. */
+.editor-identity { display: grid; grid-template-columns: auto minmax(0, 2.4fr) minmax(0, 1.3fr) minmax(0, 1.3fr) 64px; gap: 6px; align-items: center;
+  padding: 6px 8px; background: var(--chassis); border-bottom: 1px solid var(--edge); }
+.editor-identity input { width: 100%; padding: 5px 8px; }
+.editor-identity .identity-title { font-size: 15px; font-weight: 700; }
+.editor-identity .identity-number { text-align: center; font: 700 13px ui-monospace, 'Cascadia Mono', Consolas, monospace; color: var(--lcd-fg); background: var(--lcd-bg); border-color: #000; }
+.editor-identity .icon-button { width: 28px; min-width: 28px; min-height: 28px; background: transparent; border-color: transparent; box-shadow: none; color: var(--soft); }
+.editor-identity .icon-button:hover { color: var(--accent-hi); }
+
+/* Workspace: slim property column, then source and preview share the rest. */
+.editor-workspace { min-height: 0; display: grid; grid-template-columns: 216px minmax(0, 1fr) minmax(0, 1fr); background: var(--ground); }
+.editor-workspace[data-chart="false"] { grid-template-columns: 216px minmax(0, 1fr); }
+.song-editor[data-rack="false"] .editor-workspace { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.song-editor[data-rack="false"] .editor-workspace[data-chart="false"] { grid-template-columns: minmax(0, 1fr); }
+.editor-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 6px; }
+.editor-pane + .editor-pane { border-left: 1px solid var(--edge); }
+
+.editor-rack { min-height: 0; min-width: 0; overflow: hidden auto; display: flex; flex-direction: column; gap: 6px; padding: 8px;
+  background: var(--chassis); border-right: 1px solid var(--edge); scrollbar-width: thin; }
+.editor-rack[hidden] { display: none; }
+.editor-rack hr { border: 0; border-top: 1px solid var(--edge); margin: 2px 0; }
+.editor-rack input { width: 100%; min-width: 0; height: 26px; padding: 0 7px; box-sizing: border-box; }
+.rack-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.rack-fields label { min-width: 0; justify-content: end; }
+.rack-fields input { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; font-weight: 600; }
+.editor-rack .stepper { width: 100%; grid-template-columns: 1fr 24px 44px 24px; }
+.editor-rack .stepper button { min-height: 22px; }
+.editor-rack .stepper-label { font-size: 11.5px; }
+.editor-rack .lcd-value { font-size: 12px; padding: 2px 0; }
+.tag-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.tag-chips span { padding: 1px 7px; font-size: 10.5px; border-radius: 9px; color: var(--accent-hi); background: color-mix(in srgb, var(--accent), transparent 85%); }
+.editor-rack textarea { width: 100%; resize: vertical; min-height: 64px; margin-top: 4px; font-size: 12px; }
+.editor-rack summary { font-size: 11.5px; color: var(--soft); cursor: pointer; }
+.editor-rack summary:hover { color: var(--accent-hi); }
+
+.track-slot { display: flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 2px 0 8px; background: var(--well); border: 1px solid var(--edge); border-radius: 2px; }
+.track-slot > svg { color: var(--accent); flex: none; }
+.track-name { flex: 1; min-width: 0; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.track-slot .icon-button { width: 24px; min-width: 24px; min-height: 24px; background: transparent; border-color: transparent; box-shadow: none; }
+.track-pick { position: relative; flex: 1; flex-direction: row; align-items: center; gap: 6px; cursor: pointer; text-transform: none !important; letter-spacing: normal !important;
+  font-size: 11.5px !important; font-weight: 500 !important; color: var(--soft) !important; }
+.track-pick:hover { color: var(--accent-hi) !important; }
+.track-pick input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+
+/* Source: a flat insert strip with the size readout at its end. */
+.source-editor { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
+.source-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 1px; min-height: 24px; }
+.source-tools .icon-button { display: inline-flex; align-items: center; width: auto; min-width: 0; min-height: 24px; padding: 0 7px; gap: 4px; font-size: 11px; font-weight: 600;
+  color: var(--soft); background: transparent; border-color: transparent; box-shadow: none; }
+.source-tools .icon-button:hover { color: var(--accent-hi); background: var(--chassis); }
+.source-stats { margin-left: auto; padding-right: 4px; font: 600 10.5px ui-monospace, 'Cascadia Mono', Consolas, monospace; color: var(--quiet); white-space: nowrap; }
+.source-editor textarea { flex: 1; min-height: 180px; resize: none; padding: 10px 12px; line-height: 1.55; tab-size: 2;
+  font: 13px/1.55 ui-monospace, 'Cascadia Mono', Consolas, monospace; background: var(--well); }
+
+/* Preview: the section order is one inline row above the chart. */
+.section-order { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-height: 24px; }
+.section-order label { flex: 1 1 180px; flex-direction: row; align-items: center; gap: 8px; }
+.section-order input { flex: 1; min-width: 0; padding: 3px 7px; }
+.section-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.section-chips button { min-height: 20px; padding: 0 8px; gap: 3px; font-size: 11px; border-radius: 11px; }
+.section-chips button:hover { color: var(--accent-hi); }
+.section-chips .chip-clear { color: var(--quiet); background: transparent; box-shadow: none; }
+.song-editor .editor-preview { flex: 1; min-height: 0; max-height: none; overflow: auto; padding: 12px 14px; background: var(--paper); color: var(--ink-text);
+  border: 1px solid var(--edge); border-radius: 2px; box-shadow: inset 0 1px 3px #0006; }
+.preview-empty { color: var(--ink-soft); font-size: 12px; padding: 20px 0; text-align: center; }
+
+.document-note { margin: auto; display: grid; justify-items: center; gap: 8px; max-width: 360px; text-align: center; color: var(--soft); }
+.document-note svg { color: var(--accent); }
+.document-note strong { color: var(--fg); }
+.document-note p { font-size: 12px; }
+
+.pane-switch { display: none; }
+
+/* Status footer */
+.editor-status { display: flex; align-items: center; gap: 8px; padding: 5px 8px; background: var(--chassis); border-top: 1px solid var(--edge); }
+.editor-state { display: flex; align-items: center; gap: 8px; margin-right: auto; font-size: 11.5px; color: var(--quiet); min-width: 0; }
+.editor-status > button { min-width: 84px; min-height: 28px; justify-content: center; }
+.discard { display: flex; align-items: center; gap: 8px; width: 100%; }
+.discard span { margin-right: auto; font-size: 12px; color: var(--fg); font-weight: 600; }
+
+@media (max-width: 1100px) {
+  .editor-workspace { grid-template-columns: 216px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .song-editor[data-rack="false"] .editor-workspace { grid-template-columns: minmax(0, 1fr); }
+  .editor-rack { grid-row: 1 / 3; }
+  .pane-switch { display: inline-flex; justify-self: start; margin: 6px 6px 0; }
+  .editor-pane + .editor-pane { border-left: 0; }
+  .song-editor[data-pane="source"] .editor-output,
+  .song-editor[data-pane="preview"] .editor-source { display: none; }
+}
+@media (max-width: 720px) {
+  dialog.editor-window { width: 100vw; height: 100dvh; max-width: 100vw; max-height: 100dvh; margin: 0; border-radius: 0; }
+  .editor-identity { grid-template-columns: auto minmax(0, 1fr) 56px; }
+  .editor-identity > input:nth-child(3), .editor-identity > input:nth-child(4) { grid-column: 1 / -1; }
+  .editor-identity .identity-number { grid-row: 1; grid-column: 3; }
+  /* One scrolling column: every block keeps its natural height, so nothing overlaps. */
+  .editor-workspace { display: flex; flex-direction: column; overflow: auto; }
+  .editor-workspace > * { flex: none; }
+  .editor-rack { overflow: visible; border-right: 0; border-bottom: 1px solid var(--edge); }
+  .pane-switch { align-self: flex-start; }
+  .editor-workspace > .editor-pane { min-height: 380px; }
+  .editor-status > button { min-width: 0; }
+}

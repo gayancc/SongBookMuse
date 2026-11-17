@@ -4,7 +4,7 @@
 
 **Content plan.** The transport bar carries song navigation, the LCD (title, key with capo, BPM, meter, set position), the metronome beat LEDs, auto-scroll, tuner and settings. The browser on the left holds songs, folders and setlists. The sheet in the centre is the visual anchor. The channel-rack inspector on the right holds pitch, view, section order, annotations, folders and details. A hint bar at the bottom shows hover hints, notices and errors.
 
-**Interaction thesis.** Controls press into their wells (inset shadow) and pressed toggles glow amber. Only the menu, dialogs and inspector reveal with a short transition. The hint bar answers hover, so icon-only controls are always explained. Reduced-motion users receive immediate transitions.
+**Interaction thesis.** Controls press into their wells (inset shadow); pressed toggles, selected tabs and selected segments show as a filled state with amber text, never an amber ring or stripe (verified against FL Studio 2025 v25.1.1 toolbar toggles and Settings tabs). Panels separate by tone and 1 px neutral seams only — no coloured outlines, accent side-stripes or glows; keyboard `:focus-visible` outlines are the one exception. Only the menu, dialogs and inspector reveal with a short transition. The hint bar answers hover, so icon-only controls are always explained. Reduced-motion users receive immediate transitions.
 
 ## Tokens
 
@@ -27,4 +27,6 @@ Section pattern colours: verse `--verse` blue, chorus `--chorus` orange (also ti
 | Radius | 3 px everywhere (hardware feel), 50% only for colour swatches and LEDs |
 | Controls | Gradient chassis buttons with inset press state; 44 px phone targets |
 | Icons | Lucide with accessible names; names surface in the hint bar on hover |
+| Settings and dialogs | Plugin-window layout: tab toolbar over a recessed `--ground` well of chassis panels with 26 px title bars (plain uppercase label, reset icon); rows are name and hint left, control right; status strip at the foot. Use `div` inside dialogs, not `header`, because dialog headers carry title-bar styles |
+| Switches and choices | LED switch with an ON/OFF monospace readout in rows; segment buttons with an amber top line when selected; option cards show their example in an LCD cell; destructive choices tint `--danger` when selected |
 | Chord diagrams | Graphite grid lines in `--ink-soft`, nut in `--ink-text`, fingered dots and barres in `--accent`, chord name in `--chord`; cells are 3 px paper tiles inside a tinted well and scale with zoom |

@@ -34,6 +34,8 @@ export function MidiSettings({ onError }: { onError: (cause: unknown) => void })
   }
   return <section className="settings-section">
     <h3>MIDI controllers</h3>
+    {!ports && <p className="panel-empty"><strong>Not connected</strong>
+      Plug in a USB or Bluetooth MIDI controller, then scan to map its CC or note messages to page and song actions.</p>}
     <button type="button" onClick={() => void refresh()}>Scan for MIDI ports</button>
     {ports && !ports.supported && <p className="muted">MIDI device access is unavailable on this build.</p>}
     {ports?.supported && <>

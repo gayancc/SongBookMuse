@@ -635,3 +635,26 @@ fn settings_accept_german_and_latin_notation() {
         assert_eq!(db.settings().unwrap().notation, notation);
     }
 }
+
+#[test]
+fn backup_preview_counts_folders_and_documents() {
+    let library = Library::open(":memory:").unwrap();
+    library
+        .save_song(import_song("chart.cho", b"[C]Words").unwrap())
+        .unwrap();
+    library
+        .save_song(import_song("sheet.pdf", b"%PDF-1.4\n%%EOF").unwrap())
+        .unwrap();
+    for name in ["Worship", "Covers"] {
+        library
+            .save_folder(Folder {
+                name: name.into(),
+                ..Folder::default()
+            })
+            .unwrap();
+    }
+    let (_, preview) = read_backup(&write_backup(&library).unwrap()).unwrap();
+    assert_eq!(preview.songs, 2);
+    assert_eq!(preview.documents, 1);
+    assert_eq!(preview.folders, 2);
+}

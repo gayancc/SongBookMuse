@@ -1,6 +1,6 @@
 import { test, expect, chromium, type Browser, type Page } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -14,12 +14,14 @@ test.beforeAll(async () => {
   const binary = resolve("target/debug/songbook-muse.exe");
   if (!existsSync(binary)) throw new Error("Build the debug binary with npm run tauri -- build --debug --no-bundle");
   data = mkdtempSync(join(tmpdir(), "muse-ui-"));
+  mkdirSync(join(data, "exports"));
   const port = 19220;
   child = spawn(binary, [], {
     windowsHide: true,
     env: {
       ...process.env,
       MUSE_TEST_DATA_DIR: join(data, "library"),
+      MUSE_TEST_EXPORT_DIR: join(data, "exports"),
       WEBVIEW2_USER_DATA_FOLDER: join(data, "webview"),
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--remote-debugging-port=" + port,
     }
@@ -36,6 +38,12 @@ test.beforeAll(async () => {
 });
 
 const hint = () => page.locator("footer.hintbar");
+const exportsDir = () => join(data, "exports");
+/** Opens Settings on a category of the rail. */
+async function openSettings(category: string) {
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: new RegExp("^" + category) }).click();
+}
 const lcd = () => page.getByRole("status", { name: "Song display" });
 test.afterAll(async () => {
   if (page && child?.pid && child.exitCode === null) {
@@ -227,26 +235,26 @@ test("shows chord diagrams in fit and scroll layouts and applies instrument and 
   const settings = page.getByRole("button", { name: "Settings" });
   const dialog = page.getByRole("dialog");
   const close = page.getByRole("button", { name: "Close dialog" });
-  await settings.click();
+  await openSettings("Diagrams");
   await dialog.getByRole("checkbox", { name: "Left handed chord charts" }).check();
   await close.click();
   await expect.poll(muteX).toBeGreaterThan(midpoint);
 
-  await settings.click();
-  await dialog.getByLabel("Instrument").selectOption("ukulele");
+  await openSettings("Diagrams");
+  await dialog.getByRole("radio", { name: /^Ukulele/ }).check();
   await close.click();
   await expect(strip.getByRole("img", { name: "C on ukulele: 0 0 0 3" })).toBeVisible();
-  await settings.click();
-  await dialog.getByLabel("Chord diagram location").selectOption("inline");
+  await openSettings("Diagrams");
+  await dialog.getByRole("radio", { name: "On chords" }).check();
   await close.click();
   const chord = page.locator(".chart .chord-inline").filter({ hasText: /^C/ }).first();
   await chord.focus();
   await expect(chord.getByRole("img", { name: "C on ukulele: 0 0 0 3" })).toBeVisible();
 
-  await settings.click();
-  await dialog.getByLabel("Instrument").selectOption("guitar");
+  await openSettings("Diagrams");
+  await dialog.getByRole("radio", { name: /^Guitar/ }).check();
   await dialog.getByRole("checkbox", { name: "Left handed chord charts" }).uncheck();
-  await dialog.getByLabel("Chord diagram location").selectOption("off");
+  await dialog.getByRole("radio", { name: "Off", exact: true }).check();
   await close.click();
   await expect(strip).toHaveCount(0);
   await fit.click();
@@ -265,9 +273,10 @@ test("renames chords in German and Latin notation while diagrams keep letter nam
   const settings = page.getByRole("button", { name: "Settings" });
   const dialog = page.getByRole("dialog");
   const close = page.getByRole("button", { name: "Close dialog" });
+  const notationNames: Record<string, RegExp> = { standard: /^Letters/, german: /^German/, latin: /^Latin/ };
   const notation = async (value: string) => {
-    await settings.click();
-    await dialog.getByLabel("Chord notation").selectOption(value);
+    await openSettings("Chords");
+    await dialog.getByRole("radiogroup", { name: "Chord notation" }).getByRole("radio", { name: notationNames[value] }).check();
     await close.click();
   };
   await expect(names).toHaveText(["C", "Bb", "B7", "F#m/A"]);
@@ -326,8 +335,9 @@ test("taps a tempo into the metronome, saves it to the song, and auto-stops afte
   await page.waitForTimeout(2100);
   await tapEvery(5, 500);
   await expect(box.getByText("Tapped 5 beats")).toBeVisible();
-  await expect.poll(async () => Number(await bpm.textContent())).toBeGreaterThanOrEqual(117);
-  expect(Number(await bpm.textContent())).toBeLessThanOrEqual(123);
+  // Timers jitter on a busy machine; the exact averaging is covered by the Rust tests.
+  await expect.poll(async () => Number(await bpm.textContent())).toBeGreaterThanOrEqual(112);
+  expect(Number(await bpm.textContent())).toBeLessThanOrEqual(128);
   await box.getByRole("button", { name: "Tempo up" }).click();
   if (process.env.MUSE_UI_SCREENSHOTS) await page.screenshot({ path: "test-results/tempo-box.png", clip: { x: 760, y: 0, width: 600, height: 300 } });
   const tapped = Number(await bpm.textContent());
@@ -347,9 +357,10 @@ test("taps a tempo into the metronome, saves it to the song, and auto-stops afte
   await box.getByRole("button", { name: "Close tempo" }).click();
 
   const settings = page.getByRole("button", { name: "Settings" });
+  const timeoutNames: Record<string, string> = { never: "Never", "10s": "After 10 s", "10s_resume": "10 s, again per song" };
   const timeout = async (value: string) => {
-    await settings.click();
-    await page.getByRole("dialog").getByLabel("Stop metronome").selectOption(value);
+    await openSettings("Performance");
+    await page.getByRole("dialog").getByRole("radio", { name: timeoutNames[value] }).check();
     await page.getByRole("button", { name: "Close dialog" }).click();
   };
   await timeout("10s_resume");
@@ -363,6 +374,124 @@ test("taps a tempo into the metronome, saves it to the song, and auto-stops afte
   await page.getByRole("button", { name: "Tempo drill", exact: false }).first().click();
   await expect(metronome).toHaveAttribute("aria-pressed", "false");
   await timeout("never");
+});
+
+test("navigates settings by category and search, previews chords, and resets a section", async () => {
+  await page.setViewportSize({ width: 1360, height: 820 });
+  await openSettings("Display");
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const rail = dialog.getByRole("navigation", { name: "Settings categories" });
+  await expect(rail.getByRole("button")).toHaveCount(6);
+  await expect(rail.getByRole("button", { name: /^Display/ })).toHaveAttribute("aria-current", "page");
+
+  // Theme cards apply at once and the rail summary follows.
+  await dialog.getByRole("radio", { name: /^Daylight/ }).check();
+  await expect(page.locator(".app")).toHaveAttribute("data-theme", "light");
+  await expect(rail.getByRole("button", { name: /^Display/ })).toHaveAttribute("title", /Daylight/);
+  await expect(dialog.locator(".settings-status")).toContainText("Daylight");
+  if (process.env.MUSE_UI_SCREENSHOTS) await page.screenshot({ path: "test-results/settings-display-light.png" });
+  await dialog.getByRole("button", { name: "Reset Theme" }).click();
+  await expect(page.locator(".app")).toHaveAttribute("data-theme", "dark");
+  await expect(dialog.getByRole("button", { name: "Reset Theme" })).toBeDisabled();
+
+  // The chord preview renders the sample with the live notation and key spelling.
+  await rail.getByRole("button", { name: /^Chords/ }).click();
+  const preview = dialog.getByRole("figure", { name: "Chord preview" });
+  await expect(preview.locator(".chart-part strong").first()).toHaveText("G");
+  await expect(preview.locator(".chart-part strong").nth(5)).toHaveText("Bb");
+  await dialog.getByRole("radio", { name: /^German/ }).check();
+  await expect(preview.locator(".chart-part strong").nth(5)).toHaveText("B");
+  if (process.env.MUSE_UI_SCREENSHOTS) await page.screenshot({ path: "test-results/settings-chords.png" });
+  await dialog.getByRole("button", { name: "Reset Notation" }).click();
+  await expect(dialog.getByRole("radio", { name: /^Letters/ })).toBeChecked();
+
+  // Search spans every category and labels each result with its category.
+  const search = dialog.getByRole("searchbox", { name: "Search settings" });
+  await search.fill("flats");
+  await expect(dialog.getByRole("region", { name: "Search results" })).toContainText("Chords");
+  await expect(dialog.getByText("Prefer flats when the key is unknown or ambiguous")).toBeVisible();
+  await search.fill("zzzz");
+  await expect(dialog.getByText("No settings match", { exact: false })).toBeVisible();
+  await dialog.getByRole("button", { name: "Clear search" }).click();
+  await expect(rail.getByRole("button", { name: /^Chords/ })).toHaveAttribute("aria-current", "page");
+
+  if (process.env.MUSE_UI_SCREENSHOTS) {
+    for (const tab of ["Diagrams", "Performance", "Controllers", "Display"]) {
+      await rail.getByRole("button", { name: new RegExp("^" + tab) }).click();
+      await page.waitForTimeout(150);
+      await page.screenshot({ path: "test-results/settings-" + tab.toLowerCase() + ".png" });
+    }
+  }
+  // The text size field accepts typed values and clamps them to the valid range.
+  await rail.getByRole("button", { name: /^Display/ }).click();
+  const size = dialog.getByLabel("Text size (%)", { exact: true });
+  await size.fill("500");
+  await size.press("Enter");
+  await expect(size).toHaveValue("200");
+  await dialog.getByRole("button", { name: "Reset Song view" }).click();
+  await expect(size).toHaveValue("100");
+
+  // Phone width turns the rail into a scrolling tab strip above the page.
+  await page.setViewportSize({ width: 390, height: 780 });
+  await rail.getByRole("button", { name: /^Performance/ }).click();
+  await expect(dialog.getByLabel("Default scroll time (seconds)", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  if (process.env.MUSE_UI_SCREENSHOTS) await page.screenshot({ path: "test-results/settings-phone.png" });
+  await page.setViewportSize({ width: 1360, height: 820 });
+  await page.getByRole("button", { name: "Close dialog" }).click();
+});
+
+test("edits a song with insert tools, section chips, duration checks and a discard prompt", async () => {
+  await page.setViewportSize({ width: 1360, height: 820 });
+  await page.getByRole("button", { name: "Songs", exact: true }).click();
+  await page.getByRole("button", { name: "New song" }).click();
+  const editor = page.getByRole("dialog", { name: "New song" });
+  const save = editor.getByRole("button", { name: "Save song" });
+  await expect(save).toBeDisabled();
+  await expect(editor.getByText("A title is required")).toBeVisible();
+  await editor.getByLabel("Title", { exact: true }).fill("Editor drill");
+
+  // Insert tools wrap the selection or drop a placeholder at the cursor.
+  const source = editor.getByLabel("Source", { exact: true });
+  await source.fill("Opening line");
+  await source.evaluate((e: HTMLTextAreaElement) => e.setSelectionRange(e.value.length, e.value.length));
+  await editor.getByRole("button", { name: "Insert chorus" }).click();
+  await expect(source).toHaveValue(["Opening line", "{start_of_chorus}", "[G]Lyrics", "{end_of_chorus}", ""].join(String.fromCharCode(10)));
+  await expect(editor.getByText("5 lines · 1 chord")).toBeVisible();
+
+  // Detected sections become chips that build the order.
+  const chips = editor.getByRole("group", { name: "Add a section to the order" });
+  await chips.getByRole("button", { name: "Chorus" }).click();
+  await chips.getByRole("button", { name: "Chorus" }).click();
+  await expect(editor.getByLabel("Section order", { exact: true })).toHaveValue("Chorus, Chorus");
+  await expect(editor.getByRole("region", { name: "Live preview" }).locator(".chart-heading")).toHaveCount(2);
+
+  const duration = editor.getByLabel("Duration", { exact: true });
+  await duration.fill("3:7");
+  await expect(editor.getByText("Duration must look like 3:25 or 205")).toBeVisible();
+  await expect(save).toBeDisabled();
+  await duration.fill("3:25");
+  await expect(editor.getByText("Unsaved changes", { exact: false })).toBeVisible();
+  if (process.env.MUSE_UI_SCREENSHOTS) await page.screenshot({ path: "test-results/editor-desktop.png" });
+
+  // Closing with changes asks first.
+  await page.keyboard.press("Escape");
+  await expect(editor.getByRole("alert")).toContainText("Discard your changes");
+  await editor.getByRole("button", { name: "Keep editing" }).click();
+  await expect(editor.getByLabel("Title", { exact: true })).toHaveValue("Editor drill");
+
+  // Narrow windows switch between source and preview.
+  await page.setViewportSize({ width: 390, height: 780 });
+  await editor.getByRole("tab", { name: "Preview" }).click();
+  await expect(editor.getByRole("region", { name: "Live preview" })).toBeVisible();
+  await expect(source).toBeHidden();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  if (process.env.MUSE_UI_SCREENSHOTS) await page.screenshot({ path: "test-results/editor-phone.png" });
+  await page.setViewportSize({ width: 1360, height: 820 });
+
+  await page.keyboard.press("Control+s");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Editor drill", exact: true })).toBeVisible();
 });
 
 test("drags a setlist item past several positions and keeps the new order", async () => {
@@ -493,9 +622,9 @@ test("uses the default chart scroll time and adds half a viewport below long cha
   const half = await sheet.evaluate(e => e.clientHeight / 2);
 
   const settings = page.getByRole("button", { name: "Settings", exact: true });
-  await settings.click();
-  await page.getByLabel("Default scroll time (seconds)").fill("120");
-  await page.getByLabel("Default scroll time (seconds)").press("Tab");
+  await openSettings("Performance");
+  await page.getByLabel("Default scroll time (seconds)", { exact: true }).fill("120");
+  await page.getByLabel("Default scroll time (seconds)", { exact: true }).press("Tab");
   await page.getByLabel("Overscroll by half a screen").check();
   await page.getByRole("button", { name: "Close dialog" }).click();
   await expect.poll(async () => Math.abs(await pollSheet() - baseline - half)).toBeLessThanOrEqual(2);
@@ -508,9 +637,9 @@ test("uses the default chart scroll time and adds half a viewport below long cha
   await page.getByRole("button", { name: "Close details" }).click();
   await fit.click();
   await expect(sheet).toHaveAttribute("data-overscroll", "false");
-  await settings.click();
-  await page.getByLabel("Default scroll time (seconds)").fill("90");
-  await page.getByLabel("Default scroll time (seconds)").press("Tab");
+  await openSettings("Performance");
+  await page.getByLabel("Default scroll time (seconds)", { exact: true }).fill("90");
+  await page.getByLabel("Default scroll time (seconds)", { exact: true }).press("Tab");
   await page.getByLabel("Overscroll by half a screen").uncheck();
   await page.getByRole("button", { name: "Close dialog" }).click();
 });
@@ -546,7 +675,7 @@ test("learns a keyboard pedal, applies its assigned action, and remembers it aft
   const close = page.getByRole("button", { name: "Close dialog" });
   const add = page.getByRole("button", { name: "Add pedal action" });
   const pedal = page.getByRole("combobox", { name: "p", exact: true });
-  await settings.click();
+  await openSettings("Controllers");
   await add.click();
   await expect(page.getByRole("button", { name: "Press a pedal" })).toBeFocused();
   await page.keyboard.press("p");
@@ -572,7 +701,7 @@ test("learns a keyboard pedal, applies its assigned action, and remembers it aft
   await expect(search).toHaveValue("p");
   expect(await sheet.evaluate(e => e.scrollTop)).toBe(before);
   await search.fill("");
-  await settings.click();
+  await openSettings("Controllers");
   await expect(pedal).toHaveValue("page_up");
   await page.keyboard.press("p");
   expect(await sheet.evaluate(e => e.scrollTop)).toBe(before);
@@ -580,7 +709,7 @@ test("learns a keyboard pedal, applies its assigned action, and remembers it aft
   await page.keyboard.press("p");
   await expect.poll(() => sheet.evaluate(e => e.scrollTop)).toBeLessThanOrEqual(1);
 
-  await settings.click();
+  await openSettings("Controllers");
   await page.getByRole("button", { name: "Remove pedal p" }).click();
   await expect(pedal).toHaveCount(0);
   await close.click();
@@ -630,7 +759,7 @@ test("renders a PDF, inverts the page without the ink, and keeps both settings a
   await page.getByRole("button", { name: "Close details" }).click();
   const settings = page.getByRole("button", { name: "Settings" });
   const invert = page.getByRole("checkbox", { name: "Invert PDF colors" });
-  await settings.click();
+  await openSettings("Display");
   await invert.check();
   await page.getByRole("button", { name: "Close dialog" }).click();
   await expect(canvas).toHaveCSS("filter", "invert(1)");
@@ -641,7 +770,7 @@ test("renders a PDF, inverts the page without the ink, and keeps both settings a
   await expect(canvas).toHaveCSS("filter", "invert(1)");
   await expect(ink.locator("circle")).toHaveCount(1);
   await expect(ink).not.toHaveClass(/enabled/);
-  await settings.click();
+  await openSettings("Display");
   await invert.uncheck();
   await page.getByRole("button", { name: "Close dialog" }).click();
   await expect(canvas).toHaveCSS("filter", "none");
@@ -668,7 +797,7 @@ test("loads a local backing track and opens native MIDI port settings", async ()
   await page.getByRole("button", { name: "Chromatic tuner" }).click();
   await expect(page.getByRole("dialog", { name: "Chromatic tuner" })).toBeVisible();
   await page.getByRole("button", { name: "Close dialog" }).click();
-  await page.getByRole("button", { name: "Settings" }).click();
+  await openSettings("Controllers");
   await page.getByRole("button", { name: "Scan for MIDI ports" }).click();
   await expect(page.getByRole("combobox", { name: "Input", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Apply connections" }).click();
@@ -685,13 +814,78 @@ test("previews and merges the untouched original backup through the Windows UI",
     : candidates.length === 1 ? join(directory, candidates[0].name) : "";
   test.skip(!existsSync(fixture), "Original backup fixture is private.");
   await page.setViewportSize({ width: 1360, height: 820 });
-  await page.getByRole("button", { name: "Settings" }).click();
+  await openSettings("Library");
   await page.locator('input[type=file][accept*=".sbpbackup"]').setInputFiles(fixture);
-  await expect(page.getByRole("dialog", { name: "Review backup" })).toBeVisible();
-  await expect(page.getByRole("dialog").getByText("6,621 songs", { exact: false })).toBeVisible();
-  await expect(page.getByText("41 set entries", { exact: false })).toBeVisible();
-  await expect(page.getByText("Replace mode also restores supported preferences.")).toBeVisible();
-  await page.getByRole("button", { name: "Merge library" }).click();
+  const wizard = page.getByRole("dialog", { name: "Restore backup" });
+  await expect(wizard).toBeVisible();
+  await expect(wizard.getByText(/^6,621 songs · .* · preferences$/)).toBeVisible();
+  await expect(wizard.getByRole("radio", { name: "Merge" })).toBeChecked();
+  await wizard.getByRole("button", { name: "Merge library" }).click();
+  // Merging thousands of songs takes a while in a debug build.
+  await expect(wizard.getByRole("status")).toContainText("Library merged", { timeout: 90000 });
   await expect(hint()).toContainText("2 setlists restored");
+  await wizard.getByRole("button", { name: "Done" }).click();
   await expect(page.getByRole("dialog")).toBeHidden();
+});
+
+test("exports a backup and replaces the library only after saving a safety backup", async () => {
+  // The library may already hold the private original backup's thousands of songs.
+  test.setTimeout(240000);
+  await page.setViewportSize({ width: 1360, height: 820 });
+  await page.getByRole("button", { name: "Songs", exact: true }).click();
+  await page.getByRole("button", { name: "New song" }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Backup keeper");
+  await page.getByLabel("Source", { exact: true }).fill("[A]Keep me");
+  await page.getByRole("button", { name: "Save song" }).click();
+
+  await openSettings("Library");
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const rail = dialog.getByRole("navigation", { name: "Settings categories" });
+  await dialog.getByRole("button", { name: "Export backup" }).click();
+  await expect(dialog.getByRole("status")).toHaveText("Backup saved", { timeout: 60000 });
+  await expect(rail.getByRole("button", { name: /^Library/ })).toHaveAttribute("title", "Exported just now");
+  await expect(dialog.getByRole("group", { name: "Library contents" })).toContainText("OK");
+  const exported = readdirSync(exportsDir()).filter(name => /^SongBookMuse \d{4}-\d\d-\d\d\.musebackup$/.test(name));
+  expect(exported).toHaveLength(1);
+  if (process.env.MUSE_UI_SCREENSHOTS) await page.screenshot({ path: "test-results/settings-library.png" });
+
+  // A song added after the export disappears when the export replaces the library.
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  await page.getByRole("button", { name: "New song" }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Added after export");
+  await page.getByLabel("Source", { exact: true }).fill("[E]Gone soon");
+  await page.getByRole("button", { name: "Save song" }).click();
+
+  await openSettings("Library");
+  await page.locator('input[type=file][accept*=".sbpbackup"]').setInputFiles(join(exportsDir(), exported[0]));
+  const wizard = page.getByRole("dialog", { name: "Restore backup" });
+  // Previewing a large library backup takes a while.
+  await expect(wizard).toBeVisible({ timeout: 60000 });
+  await expect(wizard.getByRole("list", { name: "Warnings" })).toHaveCount(0);
+  await expect(wizard.getByRole("radio", { name: "Merge" })).toBeChecked();
+  if (process.env.MUSE_UI_SCREENSHOTS) await page.screenshot({ path: "test-results/restore-mode.png" });
+  await wizard.getByRole("radio", { name: "Replace" }).check();
+  await expect(wizard.getByText("Your preferences are replaced by the backup's.", { exact: false })).toBeVisible();
+
+  // Turning the safety backup off requires an explicit acknowledgement.
+  const safety = wizard.getByRole("checkbox", { name: "Save a safety backup of my current library first" });
+  const replace = wizard.getByRole("button", { name: "Replace library" });
+  await expect(safety).toBeChecked();
+  await safety.uncheck();
+  await expect(replace).toBeDisabled();
+  await wizard.getByRole("checkbox", { name: /I understand/ }).check();
+  await expect(replace).toBeEnabled();
+  await safety.check();
+  if (process.env.MUSE_UI_SCREENSHOTS) await page.screenshot({ path: "test-results/restore-confirm.png" });
+  await replace.click();
+  await expect(wizard.getByRole("status")).toContainText("Library replaced", { timeout: 90000 });
+  await expect(wizard.getByText("saved as a safety backup", { exact: false })).toBeVisible();
+  if (process.env.MUSE_UI_SCREENSHOTS) await page.screenshot({ path: "test-results/restore-done.png" });
+  expect(readdirSync(exportsDir()).some(name => name.startsWith("SongBookMuse before restore "))).toBe(true);
+  await wizard.getByRole("button", { name: "Done" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Songs", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Backup keeper", exact: false }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Added after export", exact: false })).toHaveCount(0);
 });

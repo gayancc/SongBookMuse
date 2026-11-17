@@ -12,3 +12,7 @@
 - Keyboard pedals in Settings learn a key and assign it to a page or song action. The assignment persists after restart.
 - Stage mode uses native fullscreen, hides the browser and transport, and shows a large stage bar with previous, auto-scroll, position and next.
 - Restore shows record counts before merge or replace. A preview token binds the action to the parsed file.
+- Settings open on the last used tab. Changes save immediately; each panel's reset restores only that panel's fields and is disabled at defaults. Search filters every setting across tabs and labels results with their tab.
+- Export writes one dated `.musebackup` through the native save dialog and records the time on this device. The Library LED is green within 7 days, amber when older and red when this device has never exported.
+- Restore is one compact panel and never changes anything until its action button is pressed: it lists what the backup holds, the Merge/Replace switch states in one line what that mode will add, remove and do to preferences, and the Merge library / Replace library button runs it. Replace saves a safety backup first by default; turning that off requires an explicit acknowledgement. Cancelling the safety save cancels the restore.
+- The song editor saves only with a title and a valid duration (m:ss or seconds); the footer names the problem. Ctrl+S saves. Closing with unsaved changes asks to keep editing or discard. Below 1100 px a Source/Preview switch shows one pane beside the properties rack; on phones the panes stack.

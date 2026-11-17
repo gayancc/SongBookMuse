@@ -114,6 +114,8 @@ export interface Preview {
     archived: number;
     sets: number;
     entries: number;
+    documents: number;
+    folders: number;
     settings: boolean;
     warnings: string[];
   };

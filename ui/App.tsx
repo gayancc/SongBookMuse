@@ -15,12 +15,15 @@ import { DialogError, IconButton, Modal } from "./components";
 import { DocumentView, type InkTool } from "./DocumentView";
 import { Inspector } from "./Inspector";
 import { Metronome } from "./Metronome";
-import { MidiSettings } from "./MidiSettings";
+import { useLastExport, backupName, type LibraryStats } from "./backup/history";
+import { LibraryPanel } from "./backup/LibraryPanel";
+import { RestoreWizard, type RestoreMode, type RestoreResult } from "./backup/RestoreWizard";
+import { SettingsWindow } from "./settings/SettingsWindow";
 import {
   blankSong, defaultSettings, duration, nil, nilEntry, noteEntry, notationOptions,
   type Folder, type NavigationAction, type Preview, type RenderOptions, type SetEntry, type Settings, type Setlist, type Song, type SongSummary, type Stroke
 } from "./model";
-import { PedalSettings, pedalKey } from "./PedalSettings";
+import { pedalKey } from "./PedalSettings";
 import { Prompt } from "./Prompt";
 import { SetEditor } from "./SetEditor";
 import { SongEditor } from "./SongEditor";
@@ -84,8 +87,9 @@ export function App() {
   const [sectionLabels, setSectionLabels] = useState<string[]>([]);
   const [fitInfo, setFitInfo] = useState<FitLayout | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
-  const [replace, setReplace] = useState(false);
+  const [backupFile, setBackupFile] = useState<{ name: string; size: number } | null>(null);
   const [restoring, setRestoring] = useState(false);
+  const lastExport = useLastExport();
   const [busy, setBusy] = useState(false);
   const [savingScrollTime, setSavingScrollTime] = useState(false);
   const [savingSectionOrder, setSavingSectionOrder] = useState(false);
@@ -343,26 +347,28 @@ export function App() {
   async function onPreview(file: File) {
     if (file.size > 64 * 1024 * 1024) throw new Error("Backup exceeds 64 MiB");
     setPreview(await invoke<Preview>("preview_backup", { data: await encode(file) }));
-    setReplace(false);
+    setBackupFile({ name: file.name, size: file.size });
     setDialog("backup");
   }
 
-  async function restore() {
-    if (!preview) return;
-    setRestoring(true);
-    const replacing = replace;
-    try {
-      const result = await invoke<{ songs: number; reused: number; sets: number }>("restore_backup",
-        { token: preview.token, mode: replacing ? "replace" : "merge" });
-      if (replacing) {
-        ++selection.current;
-        setSong(null); setSetId(null); setEntryId(null); setSurface("library"); setFilter({ kind: "all" });
-        setSettings({ ...defaultSettings, ...await invoke<Settings>("settings") });
-      }
-      await refresh();
-      setNotice(result.songs + " added · " + result.reused + " reused · " + result.sets + " setlists restored");
-      setDialog(null);
-    } finally { setRestoring(false); }
+  /** Saves a native backup; resolves false when the save dialog is cancelled. */
+  async function exportBackup(name: string) {
+    const saved = await invoke<boolean>("save_backup", { name });
+    if (saved) lastExport.record();
+    return saved;
+  }
+
+  async function restore(mode: RestoreMode): Promise<RestoreResult> {
+    if (!preview) throw new Error("Preview this backup again");
+    const result = await invoke<RestoreResult>("restore_backup", { token: preview.token, mode });
+    if (mode === "replace") {
+      ++selection.current;
+      setSong(null); setSetId(null); setEntryId(null); setSurface("library"); setFilter({ kind: "all" });
+      setSettings({ ...defaultSettings, ...await invoke<Settings>("settings") });
+    }
+    await refresh();
+    setNotice(result.songs + " added · " + result.reused + " reused · " + result.sets + " setlists restored");
+    return result;
   }
 
   async function changeSettings(next: Settings) {
@@ -453,6 +459,15 @@ export function App() {
   </> : null;
   const fitHint = fitMode && fitInfo ? "Fit to screen: " + fitInfo.columns + (fitInfo.columns === 1 ? " column" : " columns") + " · " +
     Math.round(fitInfo.scale * 100) + "% · " + fitInfo.pages.length + (fitInfo.pages.length === 1 ? " screen" : " screens") : "";
+
+  const libraryStats: LibraryStats = {
+    songs: catalog.filter(s => !s.archived).length,
+    archived: catalog.filter(s => s.archived).length,
+    documents: catalog.filter(s => s.kind !== "Chord sheet").length,
+    sets: sets.length,
+    entries: sets.reduce((total, set) => total + set.entries.length, 0),
+    folders: folders.length,
+  };
 
   return <DialogError.Provider value={error}><div className="app" data-theme={settings.theme} data-perform={perform} data-surface={surface}
     data-inspector={inspector && Boolean(song)} data-compact={settings.compact_sidebar}
@@ -627,70 +642,15 @@ export function App() {
       action={prompt.kind === "new-folder" ? "Create folder" : prompt.kind === "rename-folder" ? "Rename folder" : "Save note"}
       close={() => setPrompt(null)} submit={value => action(() => submitPrompt(value))}/>}
     {dialog === "tuner" && <Modal title="Chromatic tuner" close={() => setDialog(null)}><Tuner/></Modal>}
-    {dialog === "settings" && <Modal title="Settings" close={() => setDialog(null)}>
-      <section className="settings-section"><h3>Appearance</h3>
-        <label>Theme<select value={settings.theme} onChange={e => void action(() => changeSettings({ ...settings, theme: e.target.value as Settings["theme"] }))}>
-          <option value="dark">Studio dark</option><option value="light">Daylight</option><option value="contrast">Stage high contrast</option></select></label>
-        <label className="check"><input type="checkbox" checked={settings.compact_sidebar}
-          onChange={e => void action(() => changeSettings({ ...settings, compact_sidebar: e.target.checked }))}/>Compact browser rows</label></section>
-      <section className="settings-section"><h3>PDF display</h3>
-        <label className="check"><input type="checkbox" checked={settings.invert_pdf}
-          onChange={e => void action(() => changeSettings({ ...settings, invert_pdf: e.target.checked }))}/>Invert PDF colors</label></section>
-      <section className="settings-section"><h3>Chords</h3>
-        <label>Chord notation<select value={settings.notation} onChange={e => void action(() => changeSettings({ ...settings, notation: e.target.value as Settings["notation"] }))}>
-          <option value="standard">Letter names</option><option value="nashville">Nashville numbers</option>
-          <option value="german">German (H, B)</option><option value="latin">Latin (Do, Re, Mi)</option></select></label>
-        <label className="check"><input type="checkbox" checked={settings.key_spelling}
-          onChange={e => void action(() => changeSettings({ ...settings, key_spelling: e.target.checked }))}/>Spell transposed chords from the new key</label>
-        <label className="check"><input type="checkbox" checked={settings.flats}
-          onChange={e => void action(() => changeSettings({ ...settings, flats: e.target.checked }))}/>Prefer flats when the key is unknown or ambiguous</label></section>
-      <section className="settings-section"><h3>Chord diagrams</h3>
-        <label>Instrument<select value={settings.instrument} onChange={e => void action(() => changeSettings({ ...settings, instrument: e.target.value as Settings["instrument"] }))}>
-          <option value="guitar">Guitar (EADGBE)</option><option value="ukulele">Ukulele (GCEA)</option>
-          <option value="mandolin">Mandolin (GDAE)</option><option value="banjo">Banjo (open G)</option></select></label>
-        <label>Chord diagram location<select value={settings.diagram_location} onChange={e => void action(() => changeSettings({ ...settings, diagram_location: e.target.value as Settings["diagram_location"] }))}>
-          <option value="off">Off</option><option value="top">Strip above the chart</option><option value="inline">On chord names (hover or focus)</option></select></label>
-        <label className="check"><input type="checkbox" checked={settings.left_handed}
-          onChange={e => void action(() => changeSettings({ ...settings, left_handed: e.target.checked }))}/>Left handed chord charts</label></section>
-      <section className="settings-section"><h3>Metronome</h3>
-        <label>Stop metronome<select value={settings.metronome_timeout} onChange={e => void action(() => changeSettings({ ...settings, metronome_timeout: e.target.value as Settings["metronome_timeout"] }))}>
-          <option value="never">Never</option><option value="10s">After 10 seconds</option>
-          <option value="10s_resume">After 10 seconds, resume after changing song</option></select></label></section>
-      <section className="settings-section"><h3>Auto-scroll</h3>
-        <label>Default scroll time (seconds)<input type="number" min="15" max="1800"
-          onBlur={e => {
-            const seconds = Math.max(15, Math.min(1800, Math.floor(Number(e.target.value) || 90)));
-            if (seconds !== settings.autoscroll_duration) void action(() => changeSettings({ ...settings, autoscroll_duration: seconds }));
-            e.target.value = String(seconds);
-          }} key={settings.autoscroll_duration} defaultValue={settings.autoscroll_duration}/></label>
-        <label>Delay before scrolling (seconds)<input type="number" min="0" max="600" value={settings.autoscroll_delay}
-          onChange={e => void action(() => changeSettings({ ...settings, autoscroll_delay: Math.max(0, Math.min(600, Math.floor(Number(e.target.value) || 0))) }))}/></label>
-        <label className="check"><input type="checkbox" checked={settings.autoscroll_overscroll}
-          onChange={e => void action(() => changeSettings({ ...settings, autoscroll_overscroll: e.target.checked }))}/>Overscroll by half a screen</label></section>
-      <section className="settings-section"><h3>Library backup</h3>
-        <div className="button-row">
-          <button onClick={() => void action(async () => {
-            const bytes = await invoke<ArrayBuffer>("export_backup");
-            await exportFile("SongBookMuse.musebackup", new Blob([bytes], { type: "application/octet-stream" }));
-          })}><Download size={15}/>Export backup</button>
-          <button onClick={() => backup.current?.click()}><FolderUp size={15}/>Restore backup</button>
-        </div>
-      </section>
-      <PedalSettings bindings={settings.keyboard_pedals} change={keyboard_pedals => void action(() => changeSettings({ ...settings, keyboard_pedals }))}/>
-      <MidiSettings onError={report}/>
-    </Modal>}
-    {dialog === "backup" && preview && <Modal title="Review backup" close={() => { if (!restoring) setDialog(null); }}>
-      <p>{preview.details.format} · {preview.details.songs.toLocaleString()} songs · {preview.details.sets} setlists</p>
-      <p>{preview.details.entries} set entries · {preview.details.archived} archived songs linked from sets</p>
-      {preview.details.settings && <p className="muted">Replace mode also restores supported preferences.</p>}
-      {preview.details.warnings.map(warning => <p key={warning} className="muted">{warning}</p>)}
-      <fieldset><legend>Restore mode</legend>
-        <label className="check"><input type="radio" checked={!replace} onChange={() => setReplace(false)}/>Merge and reuse identical songs</label>
-        <label className="check"><input type="radio" checked={replace} onChange={() => setReplace(true)}/>Replace all current songs, setlists, folders and settings</label>
-      </fieldset>
-      <footer><button disabled={restoring} onClick={() => setDialog(null)}>Cancel</button>
-        <button className={replace ? "danger" : "primary"} disabled={restoring} onClick={() => void action(restore)}>
-          {restoring ? "Restoring…" : replace ? "Replace library" : "Merge library"}</button></footer>
+    {dialog === "settings" && <SettingsWindow settings={settings} change={next => void action(() => changeSettings(next))}
+      report={report} close={() => setDialog(null)} lastExport={lastExport.at}
+      library={<LibraryPanel stats={libraryStats} lastExport={lastExport.at} chooseRestore={() => backup.current?.click()}
+        exportBackup={() => exportBackup(backupName())}/>}/>}
+    {dialog === "backup" && preview && backupFile && <Modal title="Restore backup" className="wizard-window"
+      close={() => { if (!restoring) setDialog("settings"); }}>
+      <RestoreWizard preview={preview} file={backupFile} current={libraryStats} setBusy={setRestoring}
+        restore={restore} safetyExport={() => exportBackup(backupName("SongBookMuse before restore"))}
+        close={() => setDialog(null)}/>
     </Modal>}
     {dialog === "add-to-set" && song && <Modal title="Add to setlist" close={() => setDialog(null)}>
       {!sets.length && <p>Create a setlist from the browser first.</p>}

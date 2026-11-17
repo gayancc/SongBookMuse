@@ -21,6 +21,8 @@ export function PedalSettings({ bindings, change }: {
 
   return <section className="settings-section">
     <h3>Keyboard pedals</h3>
+    {Object.keys(bindings).length === 0 && <p className="panel-empty"><strong>No pedal keys yet</strong>
+      Bluetooth page turners type keys. Choose Add pedal action, then press the pedal to assign it.</p>}
     {Object.entries(bindings).map(([key, action]) => <div className="midi-row" key={key}>
       <label>{displayKey(key)}<select value={action} onChange={e => change({ ...bindings, [key]: e.target.value as NavigationAction })}>
         {Object.entries(navigationActions).map(([value, label]) => <option key={value} value={value}>{label}</option>)}

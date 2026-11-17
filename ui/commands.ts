@@ -13,8 +13,9 @@ export function decode(bytes: string) {
   return Uint8Array.from(atob(bytes), c => c.charCodeAt(0));
 }
 
-export async function exportFile(name: string, bytes: Blob) {
-  await invoke<boolean>("save_export", { name, data: await encode(bytes) });
+/** Saves through the native save dialog; resolves false when the user cancels it. */
+export async function exportFile(name: string, bytes: Blob): Promise<boolean> {
+  return invoke<boolean>("save_export", { name, data: await encode(bytes) });
 }
 
 export function safeName(name: string) {

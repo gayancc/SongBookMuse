@@ -48,6 +48,9 @@ pub struct BackupPreview {
     pub archived: usize,
     pub sets: usize,
     pub entries: usize,
+    /// Songs that hold a PDF or image document, archived or not.
+    pub documents: usize,
+    pub folders: usize,
     pub settings: bool,
     pub warnings: Vec<String>,
 }
@@ -72,6 +75,8 @@ pub fn read_backup(bytes: &[u8]) -> Result<(Backup, BackupPreview)> {
         songs: backup.songs.len() - archived,
         sets: backup.sets.len(),
         entries: backup.sets.iter().map(|s| s.entries.len()).sum(),
+        documents: backup.songs.iter().filter(|s| s.document.is_some()).count(),
+        folders: backup.folders.len(),
         settings: backup.settings.is_some(),
         warnings,
     };

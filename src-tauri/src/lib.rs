@@ -213,37 +213,44 @@ struct Preview {
 }
 
 #[tauri::command]
-async fn preview_backup(state: State<'_, AppState>, data: String) -> Command<Preview> {
-    let (backup, details) = muse_core::read_backup(&decode(&data, muse_core::MAX_BACKUP)?)
-        .map_err(|e| e.to_string())?;
-    let token = uuid::Uuid::new_v4().to_string();
-    *state
-        .pending
-        .lock()
-        .map_err(|_| "Backup preview is unavailable")? = Some((token.clone(), backup));
-    Ok(Preview { token, details })
+async fn preview_backup(app: tauri::AppHandle, data: String) -> Command<Preview> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let (backup, details) = muse_core::read_backup(&decode(&data, muse_core::MAX_BACKUP)?)
+            .map_err(|e| e.to_string())?;
+        let token = uuid::Uuid::new_v4().to_string();
+        *app.state::<AppState>()
+            .pending
+            .lock()
+            .map_err(|_| "Backup preview is unavailable")? = Some((token.clone(), backup));
+        Ok(Preview { token, details })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 async fn restore_backup(
-    state: State<'_, AppState>,
+    app: tauri::AppHandle,
     token: String,
     mode: RestoreMode,
 ) -> Command<RestoreReport> {
-    let mut pending = state
-        .pending
-        .lock()
-        .map_err(|_| "Backup preview is unavailable")?;
-    let Some((id, backup)) = pending.as_ref() else {
-        return Err("Preview this backup again".into());
-    };
-    if *id != token {
-        return Err("Preview this backup again".into());
-    }
-    let backup = backup.clone();
-    let result = with_library(&state, |db| db.restore(backup, mode))?;
-    *pending = None;
-    Ok(result)
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let mut pending = state
+            .pending
+            .lock()
+            .map_err(|_| "Backup preview is unavailable")?;
+        let backup = match pending.as_ref() {
+            Some((id, backup)) if *id == token => backup.clone(),
+            _ => return Err("Preview this backup again".into()),
+        };
+        // The preview stays available after a failed restore so it can be retried.
+        let result = with_library(&state, |db| db.restore(backup, mode))?;
+        *pending = None;
+        Ok(result)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -253,9 +260,27 @@ async fn export_backup(state: State<'_, AppState>) -> Command<tauri::ipc::Respon
 
 #[tauri::command]
 async fn save_export(app: tauri::AppHandle, name: String, data: String) -> Command<bool> {
+    let bytes = decode(&data, muse_core::MAX_BACKUP)?;
+    save_bytes(&app, &name, &bytes)
+}
+
+/// Writes a backup straight to the chosen file, without sending it through the WebView twice.
+#[tauri::command]
+async fn save_backup(app: tauri::AppHandle, name: String) -> Command<bool> {
+    // Serializing a large library and writing it is blocking work; keep it off the async workers
+    // that serve every other command.
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = with_library(&app.state::<AppState>(), |db| muse_core::write_backup(db))?;
+        save_bytes(&app, &name, &bytes)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Asks for a destination with the native save dialog; returns false when it is cancelled.
+fn save_bytes(app: &tauri::AppHandle, name: &str, bytes: &[u8]) -> Command<bool> {
     use tauri_plugin_dialog::DialogExt;
     use tauri_plugin_fs::FsExt;
-    let bytes = decode(&data, muse_core::MAX_BACKUP)?;
     if name.is_empty()
         || name
             .chars()
@@ -263,11 +288,17 @@ async fn save_export(app: tauri::AppHandle, name: String, data: String) -> Comma
     {
         return Err("Invalid export filename".into());
     }
+    // UI tests cannot drive the native save dialog; debug builds may write to a test folder instead.
+    #[cfg(debug_assertions)]
+    if let Some(dir) = std::env::var_os("MUSE_TEST_EXPORT_DIR") {
+        std::fs::write(std::path::Path::new(&dir).join(name), bytes).map_err(|e| e.to_string())?;
+        return Ok(true);
+    }
     let extension = name.rsplit_once('.').map_or("txt", |(_, ext)| ext);
     let Some(path) = app
         .dialog()
         .file()
-        .set_file_name(&name)
+        .set_file_name(name)
         .add_filter(extension.to_uppercase(), &[extension])
         .blocking_save_file()
     else {
@@ -277,7 +308,7 @@ async fn save_export(app: tauri::AppHandle, name: String, data: String) -> Comma
         tauri_plugin_fs::FilePath::Path(path) => {
             let parent = path.parent().ok_or("Invalid destination")?;
             let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
-            file.write_all(&bytes).map_err(|e| e.to_string())?;
+            file.write_all(bytes).map_err(|e| e.to_string())?;
             file.as_file().sync_all().map_err(|e| e.to_string())?;
             file.persist(path).map_err(|e| e.to_string())?;
         }
@@ -288,7 +319,7 @@ async fn save_export(app: tauri::AppHandle, name: String, data: String) -> Comma
                 .truncate(true)
                 .to_owned();
             let mut file = app.fs().open(uri, options).map_err(|e| e.to_string())?;
-            file.write_all(&bytes).map_err(|e| e.to_string())?;
+            file.write_all(bytes).map_err(|e| e.to_string())?;
         }
     }
     Ok(true)
@@ -375,6 +406,7 @@ fn run_app() {
             preview_backup,
             restore_backup,
             export_backup,
+            save_backup,
             save_export,
             midi_ports,
             midi_connect,
