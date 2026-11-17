@@ -79,3 +79,6 @@ Concise report: (1) research & REA findings verified against installed FL Studio
 5. One consolidated application verification pass after implementation.
 
 The goal is not something merely resembling FL Studio — it is to reproduce the verified functionality and appearance of the actual FL Studio desktop application, using the existing codebase and architecture, without assumptions, unnecessary redesign, or repetitive testing cycles.
+
+## Git branch policy
+Work only on `main`. Never create a branch or worktree without asking the user first. Do not open pull requests unless asked.
