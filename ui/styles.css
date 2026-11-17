@@ -105,7 +105,60 @@ label { font-size: 12px; color: var(--soft); display: flex; flex-direction: colu
 .lcd-title { flex: 1; min-width: 0; padding: 0 12px; align-self: center; font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: .02em; }
 .lcd-cell { display: grid; align-content: center; padding: 0 11px; border-left: 1px solid #ffffff10; font-size: 16px; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .lcd-cell small { font-size: 9px; color: var(--lcd-dim); text-shadow: none; font-weight: 500; line-height: 1; }
-.lcd-cell em { font-style: normal; font-size: 11px; margin-left: 4px; color: var(--lcd-dim); }
+.key-readout {
+  display: grid; grid-template: auto auto / minmax(0, 1fr) auto; align-content: center; gap: 3px 10px;
+  min-width: 0; min-height: 56px; padding: 6px 10px; text-align: left; background: var(--lcd-bg);
+  color: var(--lcd-fg); border: 1px solid #000; border-radius: var(--radius); box-shadow: inset 0 1px 4px #0009;
+}
+.key-readout small, .key-picker-display small {
+  font-size: 10px; line-height: 1; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--lcd-fg); opacity: .78;
+}
+.key-readout-value {
+  grid-row: 2; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 650 20px/1.1 'DM Sans Variable', system-ui, sans-serif;
+}
+.key-readout svg { grid-area: 1 / 2 / span 2; align-self: center; }
+.key-readout em { margin-left: 4px; font: 10px ui-monospace, monospace; opacity: .78; }
+.key-readout-compact {
+  flex: none; min-height: 0; max-width: 94px; padding: 0 8px; gap: 2px 5px; border: 0; border-left: 1px solid #ffffff16;
+}
+.key-readout-compact small { font-size: 9px; }
+.key-readout-compact .key-readout-value { font: 650 16px/1 ui-monospace, Consolas, monospace; }
+.key-readout-compact svg { width: 12px; }
+button.key-readout:hover:not(:disabled), button.key-readout:focus-visible {
+  background: color-mix(in srgb, var(--lcd-bg), var(--lcd-fg) 12%);
+}
+.lcd .key-readout:focus-visible { outline-offset: -2px; }
+.stage-bar .key-readout { min-width: 64px; min-height: 52px; border-radius: var(--radius); padding: 0 7px; }
+
+/* ---------- direct key selection ---------- */
+dialog.key-picker { width: min(94vw, 414px); }
+.key-picker[open] { animation: show .14s ease-out; }
+.key-picker-display {
+  display: flex; align-items: end; justify-content: space-between; gap: 8px; padding: 12px;
+  background: var(--lcd-bg); color: var(--lcd-fg); border: 1px solid #000; border-radius: var(--radius);
+  box-shadow: inset 0 2px 6px #0009;
+}
+.key-picker-display > div { display: grid; gap: 4px; }
+.key-picker-display strong { font-size: 28px; line-height: 1.1; }
+.key-picker-display > span { font-size: 11px; text-align: right; }
+.key-piano {
+  display: grid; grid-template: 40px 48px / repeat(14, minmax(0, 1fr)); gap: 4px;
+  margin-top: 12px; padding: 4px; background: var(--ground); border-radius: var(--radius);
+}
+.key-piano .piano-key {
+  padding: 0; gap: 0; font-size: 17px; font-weight: 700; border-color: var(--bevel);
+  background: var(--chassis-hi);
+}
+.key-piano .piano-key[data-raised="true"] { font-size: 15px; background: var(--well); }
+.key-piano .piano-key:hover:not(:disabled) { border-color: var(--accent); }
+.key-piano .piano-key[aria-pressed="true"] {
+  background: var(--lcd-bg); color: var(--lcd-fg); border-color: var(--accent);
+  box-shadow: inset 0 -3px var(--accent);
+}
+.piano-key span { font-size: .7em; align-self: center; margin-top: .3em; }
+.key-picker .key-reset { min-height: 34px; color: var(--soft); }
 .metro { display: flex; align-items: center; gap: 4px; }
 .beat-leds { display: flex; gap: 3px; padding: 0 4px; }
 .beat-leds i { width: 7px; height: 7px; border-radius: 50%; background: #3b2a12; box-shadow: inset 0 1px 1px #000a; }
@@ -345,7 +398,7 @@ fieldset { margin: 12px 0; border: 1px solid var(--edge); border-radius: var(--r
 @keyframes show { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 
 @media (max-width: 1180px) {
-  .lcd-cell:nth-of-type(3), .lcd-cell:nth-of-type(4) { display: none; }
+  .lcd-bpm, .lcd-signature { display: none; }
   .brand span { display: none; }
 }
 @media (max-width: 1050px) {
@@ -362,7 +415,11 @@ fieldset { margin: 12px 0; border: 1px solid var(--edge); border-radius: var(--r
   }
   .transport { gap: 5px; padding: 0 6px; }
   .transport .brand, .transport .metro, .lcd-cell:not(:last-child) { display: none; }
-  .transport .transport-group:last-child .icon-button:not([aria-label="Settings"]) { display: none; }
+  .lcd-cell { padding-inline: 6px; }
+  .lcd .key-readout { max-width: 70px; padding-inline: 5px; }
+  .lcd-title { padding-inline: 7px; }
+  .stage-bar { gap: 6px; }
+  .transport-tools .icon-button:not([aria-label="Settings"]) { display: none; }
   .browser, .workspace { grid-area: main; }
   .hintbar { display: none; }
   .app[data-surface="song"] .browser, .app[data-surface="library"] .workspace { display: none; }
@@ -375,6 +432,19 @@ fieldset { margin: 12px 0; border: 1px solid var(--edge); border-radius: var(--r
   .sheet { padding: 16px 14px; }
   .inspector { top: 50px; bottom: calc(52px + env(safe-area-inset-bottom)); }
   .editor-split, .fields { grid-template-columns: 1fr; }
+}
+@media (max-width: 360px) {
+  .transport-keys { gap: 2px; }
+  .transport-keys .icon-button { width: 26px; min-width: 26px; }
+  .transport-keys .play { width: 32px; }
+  .lcd[data-song="true"] .lcd-cell { display: none; }
+}
+@media (max-width: 440px) {
+  .lcd[data-song="true"] .lcd-title { display: none; }
+  .lcd .key-readout { flex: 1; max-width: none; }
+  .lcd .key-readout-value, .lcd-cell { font-size: 14px; }
+  .lcd .key-readout em { display: none; }
+  .lcd-cell { padding-inline: 4px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }
 @media print {

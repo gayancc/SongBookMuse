@@ -122,6 +122,7 @@ impl Naming {
 /// Returns the major-key tonic for a key name, converting minor keys to their relative major.
 fn tonic(key: &str) -> Option<(i16, bool)> {
     let (root, rest) = note(key.trim())?;
+    let rest = rest.trim_start();
     let minor = rest.starts_with('m') && !rest.starts_with("maj");
     Some((root, minor))
 }
@@ -223,6 +224,41 @@ pub fn display_key(key: &str, shift: i16, flats: bool, key_spelling: bool) -> St
         ..RenderOptions::default()
     })
     .format(key.trim())
+}
+
+#[derive(Serialize)]
+pub struct KeyChoices {
+    pub original: String,
+    pub tonic: usize,
+    pub minor: bool,
+    pub names: [String; 12],
+}
+
+/// The names of the twelve destinations, using the chart's transposed spelling.
+pub fn key_choices(key: &str, flats: bool, key_spelling: bool) -> Option<KeyChoices> {
+    let key = key.trim();
+    let (root, quality) = note(key)?;
+    let minor = match quality.trim_start() {
+        "" | "M" | "maj" | "major" => false,
+        "m" | "min" | "minor" => true,
+        _ => return None,
+    };
+    let original = format!("{}{}", source_root(key), if minor { "m" } else { "" });
+    let names = std::array::from_fn(|pitch| {
+        let delta = (pitch as i16 - root).rem_euclid(12);
+        display_key(
+            &original,
+            if delta == 0 { 12 } else { delta },
+            flats,
+            key_spelling,
+        )
+    });
+    Some(KeyChoices {
+        original,
+        tonic: root as usize,
+        minor,
+        names,
+    })
 }
 
 fn lyric(line: &str, fmt: &Formatter) -> Vec<Part> {

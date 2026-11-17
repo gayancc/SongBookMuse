@@ -15,6 +15,7 @@ import { decode, encode, exportFile, safeName } from "./commands";
 import { DialogError, IconButton, Modal } from "./components";
 import { DocumentView, type InkTool } from "./DocumentView";
 import { Inspector } from "./Inspector";
+import { activePitch, KeyPicker, KeyReadout, type KeyChoices } from "./KeyPicker";
 import { Metronome } from "./Metronome";
 import { useLastExport, backupName, type LibraryStats } from "./backup/history";
 import { LibraryPanel } from "./backup/LibraryPanel";
@@ -31,7 +32,7 @@ import { SongEditor } from "./SongEditor";
 import { Tuner } from "./Tuner";
 import { useAutoScroll } from "./useAutoScroll";
 
-type Dialog = "settings" | "backup" | "delete-song" | "delete-set" | "delete-folder" | "add-to-set" | "tuner" | null;
+type Dialog = "settings" | "backup" | "delete-song" | "delete-set" | "delete-folder" | "add-to-set" | "tuner" | "key-picker" | null;
 type PromptState = { kind: "new-folder" } | { kind: "rename-folder"; folder: Folder } | { kind: "note"; entry: SetEntry | null } | null;
 const songTypes = ".txt,.pro,.cho,.chordpro,.chopro,.crd,.chords,.cpro,.pdf,.png,.jpg,.jpeg,.webp";
 const blankSet = (): Setlist => ({ id: nil, title: "", date: "", pinned: false, entries: [] });
@@ -80,7 +81,8 @@ export function App() {
   const [hint, setHint] = useState("");
   const [page, setPage] = useState(1);
   const [pageCount, setPageCount] = useState(1);
-  const [displayKey, setDisplayKey] = useState("");
+  const [keyLookup, setKeyLookup] = useState<{ request: object; choices: KeyChoices | null } | null>(null);
+  const [savingPitch, setSavingPitch] = useState(false);
   const [tool, setTool] = useState<InkTool>("none");
   const [brush, setBrush] = useState("#e8453c");
   const [width, setWidth] = useState(0.004);
@@ -108,6 +110,12 @@ export function App() {
   const noteItem = entry?.note != null ? entry : null;
   const shift = entry?.transpose ?? song?.transpose ?? 0;
   const capo = entry?.capo ?? song?.capo ?? 0;
+  const writtenKey = song?.key.trim() ?? "";
+  const keyRequest = useMemo(() => ({ key: writtenKey, flats: settings.flats, keySpelling: settings.key_spelling }),
+    [writtenKey, settings.flats, settings.key_spelling]);
+  const keyReady = !writtenKey || keyLookup?.request === keyRequest;
+  const keyChoices = keyLookup?.request === keyRequest ? keyLookup.choices : null;
+  const displayKey = keyChoices ? shift === 0 ? keyChoices.original : keyChoices.names[activePitch(keyChoices, shift)] : writtenKey;
   const locked = Boolean(song?.locked);
   const scrollDuration = song?.duration || settings.autoscroll_duration;
   // A tapped tempo plays and shows on the LCD for its song until saved or another song opens.
@@ -176,12 +184,17 @@ export function App() {
   }, [search, catalog, mode, report]);
 
   useEffect(() => {
+    if (!keyRequest.key) return;
     let obsolete = false;
-    if (!song?.key) { setDisplayKey(""); return; }
-    void invoke<string>("transpose", { chord: song.key, shift, flats: settings.flats, keySpelling: settings.key_spelling })
-      .then(value => { if (!obsolete) setDisplayKey(value); }, report);
+    void invoke<KeyChoices | null>("key_choices", keyRequest).then(
+      choices => { if (!obsolete) setKeyLookup({ request: keyRequest, choices }); },
+      error => {
+        if (obsolete) return;
+        report(error);
+        setKeyLookup({ request: keyRequest, choices: null });
+      });
     return () => { obsolete = true; };
-  }, [song?.key, shift, settings.flats, settings.key_spelling, report]);
+  }, [keyRequest, report]);
 
   useEffect(() => {
     let obsolete = false;
@@ -294,10 +307,15 @@ export function App() {
   }
 
   async function modifyPitch(property: "transpose" | "capo", value: number) {
-    if (!song) return;
-    if (entry && currentSet) {
-      await writeSet({ ...currentSet, entries: currentSet.entries.map(e => e.id === entry.id ? { ...e, [property]: value } : e) });
-    } else await saveSong({ ...song, [property]: value }, false);
+    if (!song || savingPitch) return;
+    setSavingPitch(true);
+    try {
+      if (entry && currentSet) {
+        await writeSet({ ...currentSet, entries: currentSet.entries.map(e => e.id === entry.id ? { ...e, [property]: value } : e) });
+      } else await saveSong({ ...song, [property]: value }, false);
+    } finally {
+      setSavingPitch(false);
+    }
   }
 
   async function changeSectionOrder(order: string | null) {
@@ -439,6 +457,9 @@ export function App() {
   const pdf = song?.document?.mime === "application/pdf";
   const canDraw = Boolean(song?.document) && !locked;
   const lcdTitle = noteItem ? "Note" : song?.title ?? (currentSet ? currentSet.title : "No song loaded");
+  const openKeyPicker = song && !song.document && keyReady
+    ? keyChoices ? () => { setError(""); setDialog("key-picker"); } : !locked ? () => setEditing(song) : undefined
+    : undefined;
   const position = index >= 0 && currentSet ? pad(index + 1) + "/" + pad(currentSet.entries.length) : "--/--";
   const fitMode = settings.layout === "fit" && Boolean(song) && !song?.document && !noteItem;
   const sectionOrder = entry?.section_order ?? song?.section_order ?? "";
@@ -498,14 +519,14 @@ export function App() {
           disabled={!song && !noteItem} onClick={togglePerformance}>{perform ? <Square size={13}/> : <Play size={15}/>}</button>
         <IconButton label="Next song" disabled={!currentSet || index < 0 || index >= currentSet.entries.length - 1} onClick={() => navigate(1)}><SkipForward size={15}/></IconButton>
       </div>
-      <div className="lcd" role="status" aria-label="Song display">
+      <div className="lcd" data-song={Boolean(song)} role="status" aria-label="Song display">
         <span className="lcd-title">{lcdTitle}</span>
-        <span className="lcd-cell"><small>Key</small>{displayKey || "--"}{capo > 0 && <em>c{capo}</em>}</span>
-        <span className="lcd-cell"><small>BPM</small>{tempo || "---"}</span>
-        <span className="lcd-cell"><small>Sig</small>{song?.time_signature || "4/4"}</span>
+        {song && <KeyReadout compact value={displayKey} keys={keyChoices} capo={capo} open={openKeyPicker} pending={savingPitch}/>}
+        <span className="lcd-cell lcd-bpm"><small>BPM</small>{tempo || "---"}</span>
+        <span className="lcd-cell lcd-signature"><small>Sig</small>{song?.time_signature || "4/4"}</span>
         <span className="lcd-cell"><small>Set</small>{position}</span>
       </div>
-      <div className="transport-group">
+      <div className="transport-group transport-tools">
         <Metronome tempo={tempo} savedTempo={song?.tempo ?? 0} beats={Number((song?.time_signature || "4/4").split("/")[0])}
           songKey={(song?.id ?? "") + ":" + (entryId ?? "")} timeout={settings.metronome_timeout} canSave={Boolean(song) && !locked}
           onTempo={bpm => { if (song) setTempoDraft({ song: song.id, bpm }); }}
@@ -601,6 +622,8 @@ export function App() {
           <button type="button" aria-label={autoScrollLabel} aria-pressed={autoScroll.running}
             disabled={!song || Boolean(song.document)} onClick={autoScroll.toggle}><ScrollText size={20}/></button>
           <span className="lcd-inline">{position}</span>
+          {song && displayKey && <KeyReadout compact value={displayKey} keys={keyChoices} capo={capo}
+            open={keyChoices ? openKeyPicker : undefined} pending={savingPitch}/>}
           <button type="button" aria-label="Next song" disabled={!currentSet || index < 0 || index >= currentSet.entries.length - 1} onClick={() => navigate(1)}><SkipForward size={20}/></button>
         </footer>}
         {song?.track && <BackingTrack key={song.id} track={song.track} onError={report}/>}
@@ -613,6 +636,7 @@ export function App() {
     </main>
 
     {song && inspector && !perform && <Inspector song={song} kind={lookup.get(song.id)?.kind ?? "Chord sheet"} shift={shift} capo={capo}
+      keyReadout={<KeyReadout value={displayKey} keys={keyChoices} open={openKeyPicker} pending={savingPitch}/>} savingPitch={savingPitch}
       inSet={Boolean(entry)} changePitch={(p, v) => void action(() => modifyPitch(p, v))} settings={settings}
       changeSettings={next => void action(() => changeSettings(next))} fitScale={fitMode ? fitInfo?.scale ?? null : null} folders={folders}
       toggleFolder={id => void action(() => saveSong({ ...song, folders: song.folders.includes(id) ? song.folders.filter(f => f !== id) : [...song.folders, id] }, false))}
@@ -647,6 +671,11 @@ export function App() {
       action={prompt.kind === "new-folder" ? "Create folder" : prompt.kind === "rename-folder" ? "Rename folder" : "Save note"}
       close={() => setPrompt(null)} submit={value => action(() => submitPrompt(value))}/>}
     {dialog === "tuner" && <Modal title="Chromatic tuner" close={() => setDialog(null)}><Tuner/></Modal>}
+    {dialog === "key-picker" && keyChoices && <KeyPicker keys={keyChoices} shift={shift} inSet={Boolean(entry)} pending={savingPitch}
+      close={() => { if (!savingPitch) setDialog(null); }} change={value => void action(async () => {
+        if (value !== shift) await modifyPitch("transpose", value);
+        setDialog(null);
+      })}/>}
     {dialog === "settings" && <SettingsWindow settings={settings} change={next => void action(() => changeSettings(next))}
       report={report} close={() => setDialog(null)} lastExport={lastExport.at}
       library={<LibraryPanel stats={libraryStats} lastExport={lastExport.at} chooseRestore={() => backup.current?.click()}

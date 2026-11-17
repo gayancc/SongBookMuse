@@ -146,6 +146,11 @@ fn transpose(chord: String, shift: i16, flats: bool, key_spelling: Option<bool>)
 }
 
 #[tauri::command]
+fn key_choices(key: String, flats: bool, key_spelling: bool) -> Option<muse_core::KeyChoices> {
+    muse_core::key_choices(&key, flats, key_spelling)
+}
+
+#[tauri::command]
 async fn folders(state: State<'_, AppState>) -> Command<Vec<Folder>> {
     with_library(&state, |db| db.folders())
 }
@@ -396,6 +401,7 @@ fn run_app() {
             section_labels,
             fit_layout,
             transpose,
+            key_choices,
             tap_tempo,
             chord_diagram,
             song_chords,

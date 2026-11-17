@@ -1,4 +1,5 @@
 import { Eraser, Highlighter, Lock, LockOpen, PenLine, Pencil, Redo2, Undo2, X } from "lucide-react";
+import type { ReactNode } from "react";
 import { IconButton, Stepper } from "./components";
 import type { InkTool } from "./DocumentView";
 import { duration, type Folder, type Settings, type Song } from "./model";
@@ -9,6 +10,8 @@ interface InspectorProps {
   shift: number;
   capo: number;
   inSet: boolean;
+  keyReadout: ReactNode;
+  savingPitch: boolean;
   changePitch: (property: "transpose" | "capo", value: number) => void;
   settings: Settings;
   changeSettings: (settings: Settings) => void;
@@ -69,9 +72,10 @@ export function Inspector(props: InspectorProps) {
     </div>
     <section className="rack">
       <h3>Pitch{props.inSet && <small> · this setlist</small>}</h3>
+      {props.keyReadout}
       <Stepper label="Transpose" value={props.shift} display={(props.shift > 0 ? "+" : "") + props.shift} min={-24} max={24}
-        onChange={v => props.changePitch("transpose", v)}/>
-      <Stepper label="Capo" value={props.capo} min={0} max={12} onChange={v => props.changePitch("capo", v)}/>
+        disabled={props.savingPitch} onChange={v => props.changePitch("transpose", v)}/>
+      <Stepper label="Capo" value={props.capo} min={0} max={12} disabled={props.savingPitch} onChange={v => props.changePitch("capo", v)}/>
       <label className="check"><input type="checkbox" checked={settings.notation === "nashville"}
         onChange={e => props.changeSettings({ ...settings, notation: e.target.checked ? "nashville" : "standard" })}/>Nashville numbers</label>
     </section>
