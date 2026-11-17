@@ -32,7 +32,7 @@ import { SongEditor } from "./SongEditor";
 import { Tuner } from "./Tuner";
 import { useAutoScroll } from "./useAutoScroll";
 
-type Dialog = "settings" | "backup" | "delete-song" | "delete-set" | "delete-folder" | "add-to-set" | "tuner" | "key-picker" | null;
+type Dialog = "settings" | "backup" | "delete-song" | "delete-set" | "delete-folder" | "add-to-set" | "tuner" | null;
 type PromptState = { kind: "new-folder" } | { kind: "rename-folder"; folder: Folder } | { kind: "note"; entry: SetEntry | null } | null;
 const songTypes = ".txt,.pro,.cho,.chordpro,.chopro,.crd,.chords,.cpro,.pdf,.png,.jpg,.jpeg,.webp";
 const blankSet = (): Setlist => ({ id: nil, title: "", date: "", pinned: false, entries: [] });
@@ -40,7 +40,7 @@ const textEntry = (target: EventTarget | null): boolean => target instanceof Ele
   Boolean(target.closest("input, textarea, select, [contenteditable], dialog"));
 /** Widgets that own arrow and paging keys natively. */
 const keyWidget = (target: EventTarget | null): boolean => target instanceof Element &&
-  Boolean(target.closest("[role=slider], [role=tab], [role=radio], [role=radiogroup], [role=listbox], [role=menu], [role=menuitem]"));
+  Boolean(target.closest("[role=slider], [role=tab], [role=radio], [role=radiogroup], [role=listbox], [role=menu], [role=menuitem], .key-picker"));
 
 function shuffled<T>(items: T[]): T[] {
   const copy = [...items];
@@ -82,6 +82,7 @@ export function App() {
   const [page, setPage] = useState(1);
   const [pageCount, setPageCount] = useState(1);
   const [keyLookup, setKeyLookup] = useState<{ request: object; choices: KeyChoices | null } | null>(null);
+  const [keyAnchor, setKeyAnchor] = useState<HTMLButtonElement | null>(null);
   const [savingPitch, setSavingPitch] = useState(false);
   const [tool, setTool] = useState<InkTool>("none");
   const [brush, setBrush] = useState("#e8453c");
@@ -131,6 +132,7 @@ export function App() {
   }, [notice]);
 
   const report = useCallback((cause: unknown) => setError(String(cause)), []);
+  const closeKeyPicker = useCallback(() => setKeyAnchor(null), []);
   const action = useCallback(async (task: () => Promise<void>) => {
     setError("");
     try { await task(); } catch (cause) { report(cause); }
@@ -150,6 +152,7 @@ export function App() {
     const request = ++selection.current;
     const next = await invoke<Song>("song", { id });
     if (request !== selection.current) return;
+    setKeyAnchor(null);
     setSong(next); setSetId(list); setEntryId(position); setSurface("song");
     resetView();
     if (next.midi.length) void invoke("midi_open_song", { id }).catch(report);
@@ -157,6 +160,7 @@ export function App() {
   const openEntry = useCallback((set: Setlist, item: SetEntry) => {
     if (item.note != null) {
       ++selection.current;
+      setKeyAnchor(null);
       setSong(null); setSetId(set.id); setEntryId(item.id); setSurface("song");
       resetView();
     } else void action(() => changeSong(item.song_id, set.id, item.id));
@@ -458,7 +462,10 @@ export function App() {
   const canDraw = Boolean(song?.document) && !locked;
   const lcdTitle = noteItem ? "Note" : song?.title ?? (currentSet ? currentSet.title : "No song loaded");
   const openKeyPicker = song && !song.document && keyReady
-    ? keyChoices ? () => { setError(""); setDialog("key-picker"); } : !locked ? () => setEditing(song) : undefined
+    ? keyChoices ? (anchor: HTMLButtonElement) => {
+        setError("");
+        setKeyAnchor(current => current === anchor ? null : anchor);
+      } : !locked ? () => setEditing(song) : undefined
     : undefined;
   const position = index >= 0 && currentSet ? pad(index + 1) + "/" + pad(currentSet.entries.length) : "--/--";
   const fitMode = settings.layout === "fit" && Boolean(song) && !song?.document && !noteItem;
@@ -521,7 +528,7 @@ export function App() {
       </div>
       <div className="lcd" data-song={Boolean(song)} role="status" aria-label="Song display">
         <span className="lcd-title">{lcdTitle}</span>
-        {song && <KeyReadout compact value={displayKey} keys={keyChoices} capo={capo} open={openKeyPicker} pending={savingPitch}/>}
+        {song && <KeyReadout compact value={displayKey} keys={keyChoices} capo={capo} anchor={keyAnchor} open={openKeyPicker} pending={savingPitch}/>}
         <span className="lcd-cell lcd-bpm"><small>BPM</small>{tempo || "---"}</span>
         <span className="lcd-cell lcd-signature"><small>Sig</small>{song?.time_signature || "4/4"}</span>
         <span className="lcd-cell"><small>Set</small>{position}</span>
@@ -623,7 +630,7 @@ export function App() {
             disabled={!song || Boolean(song.document)} onClick={autoScroll.toggle}><ScrollText size={20}/></button>
           <span className="lcd-inline">{position}</span>
           {song && displayKey && <KeyReadout compact value={displayKey} keys={keyChoices} capo={capo}
-            open={keyChoices ? openKeyPicker : undefined} pending={savingPitch}/>}
+            anchor={keyAnchor} open={keyChoices ? openKeyPicker : undefined} pending={savingPitch}/>}
           <button type="button" aria-label="Next song" disabled={!currentSet || index < 0 || index >= currentSet.entries.length - 1} onClick={() => navigate(1)}><SkipForward size={20}/></button>
         </footer>}
         {song?.track && <BackingTrack key={song.id} track={song.track} onError={report}/>}
@@ -636,7 +643,7 @@ export function App() {
     </main>
 
     {song && inspector && !perform && <Inspector song={song} kind={lookup.get(song.id)?.kind ?? "Chord sheet"} shift={shift} capo={capo}
-      keyReadout={<KeyReadout value={displayKey} keys={keyChoices} open={openKeyPicker} pending={savingPitch}/>} savingPitch={savingPitch}
+      keyReadout={<KeyReadout value={displayKey} keys={keyChoices} anchor={keyAnchor} open={openKeyPicker} pending={savingPitch}/>} savingPitch={savingPitch}
       inSet={Boolean(entry)} changePitch={(p, v) => void action(() => modifyPitch(p, v))} settings={settings}
       changeSettings={next => void action(() => changeSettings(next))} fitScale={fitMode ? fitInfo?.scale ?? null : null} folders={folders}
       toggleFolder={id => void action(() => saveSong({ ...song, folders: song.folders.includes(id) ? song.folders.filter(f => f !== id) : [...song.folders, id] }, false))}
@@ -671,10 +678,13 @@ export function App() {
       action={prompt.kind === "new-folder" ? "Create folder" : prompt.kind === "rename-folder" ? "Rename folder" : "Save note"}
       close={() => setPrompt(null)} submit={value => action(() => submitPrompt(value))}/>}
     {dialog === "tuner" && <Modal title="Chromatic tuner" close={() => setDialog(null)}><Tuner/></Modal>}
-    {dialog === "key-picker" && keyChoices && <KeyPicker keys={keyChoices} shift={shift} inSet={Boolean(entry)} pending={savingPitch}
-      close={() => { if (!savingPitch) setDialog(null); }} change={value => void action(async () => {
+    {keyAnchor && keyChoices && <KeyPicker anchor={keyAnchor} keys={keyChoices} shift={shift} inSet={Boolean(entry)}
+      pending={savingPitch} error={error} close={closeKeyPicker} change={value => void action(async () => {
         if (value !== shift) await modifyPitch("transpose", value);
-        setDialog(null);
+        closeKeyPicker();
+        requestAnimationFrame(() => {
+          if (document.activeElement === document.body) keyAnchor.focus({ preventScroll: true });
+        });
       })}/>}
     {dialog === "settings" && <SettingsWindow settings={settings} change={next => void action(() => changeSettings(next))}
       report={report} close={() => setDialog(null)} lastExport={lastExport.at}

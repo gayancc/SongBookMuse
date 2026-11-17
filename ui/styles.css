@@ -110,7 +110,7 @@ label { font-size: 12px; color: var(--soft); display: flex; flex-direction: colu
   min-width: 0; min-height: 56px; padding: 6px 10px; text-align: left; background: var(--lcd-bg);
   color: var(--lcd-fg); border: 1px solid #000; border-radius: var(--radius); box-shadow: inset 0 1px 4px #0009;
 }
-.key-readout small, .key-picker-display small {
+.key-readout small {
   font-size: 10px; line-height: 1; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
   color: var(--lcd-fg); opacity: .78;
 }
@@ -126,26 +126,25 @@ label { font-size: 12px; color: var(--soft); display: flex; flex-direction: colu
 .key-readout-compact small { font-size: 9px; }
 .key-readout-compact .key-readout-value { font: 650 16px/1 ui-monospace, Consolas, monospace; }
 .key-readout-compact svg { width: 12px; }
-button.key-readout:hover:not(:disabled), button.key-readout:focus-visible {
+button.key-readout:hover:not(:disabled), button.key-readout:focus-visible, button.key-readout[aria-expanded="true"] {
   background: color-mix(in srgb, var(--lcd-bg), var(--lcd-fg) 12%);
 }
+.key-readout[aria-expanded="true"] svg { transform: rotate(180deg); }
 .lcd .key-readout:focus-visible { outline-offset: -2px; }
 .stage-bar .key-readout { min-width: 64px; min-height: 52px; border-radius: var(--radius); padding: 0 7px; }
 
 /* ---------- direct key selection ---------- */
-dialog.key-picker { width: min(94vw, 414px); }
-.key-picker[open] { animation: show .14s ease-out; }
-.key-picker-display {
-  display: flex; align-items: end; justify-content: space-between; gap: 8px; padding: 12px;
-  background: var(--lcd-bg); color: var(--lcd-fg); border: 1px solid #000; border-radius: var(--radius);
-  box-shadow: inset 0 2px 6px #0009;
+.key-picker {
+  position: fixed; z-index: 40; width: min(100vw - 12px, 360px); max-height: calc(100dvh - 12px); overflow: auto;
+  padding: 8px; color: var(--fg); background: var(--chassis); border: 1px solid var(--edge);
+  border-radius: var(--radius); box-shadow: 0 8px 22px #0009, inset 0 1px 0 #ffffff14;
+  animation: show .12s ease-out;
 }
-.key-picker-display > div { display: grid; gap: 4px; }
-.key-picker-display strong { font-size: 28px; line-height: 1.1; }
-.key-picker-display > span { font-size: 11px; text-align: right; }
+.key-picker-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 1px 4px 6px; }
+.key-picker-heading small { color: var(--soft); font-size: 11px; }
 .key-piano {
   display: grid; grid-template: 40px 48px / repeat(14, minmax(0, 1fr)); gap: 4px;
-  margin-top: 12px; padding: 4px; background: var(--ground); border-radius: var(--radius);
+  padding: 4px; background: var(--ground); border-radius: var(--radius);
 }
 .key-piano .piano-key {
   padding: 0; gap: 0; font-size: 17px; font-weight: 700; border-color: var(--bevel);
@@ -158,7 +157,8 @@ dialog.key-picker { width: min(94vw, 414px); }
   box-shadow: inset 0 -3px var(--accent);
 }
 .piano-key span { font-size: .7em; align-self: center; margin-top: .3em; }
-.key-picker .key-reset { min-height: 34px; color: var(--soft); }
+.key-picker footer { margin-top: 6px; }
+.key-picker .key-reset { width: 100%; justify-content: start; min-height: 32px; color: var(--soft); }
 .metro { display: flex; align-items: center; gap: 4px; }
 .beat-leds { display: flex; gap: 3px; padding: 0 4px; }
 .beat-leds i { width: 7px; height: 7px; border-radius: 50%; background: #3b2a12; box-shadow: inset 0 1px 1px #000a; }
