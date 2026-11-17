@@ -22,10 +22,6 @@ To publish a new alpha, create a GitHub release whose tag contains `alpha` (for 
 
 ![The Settings window on the Display tab with theme, song view and browser options](docs/screenshots/settings.png)
 
-**A desktop app, not a web page.** SongBookMuse draws its own window controls, has no browser menus, and opens with an animated splash while your library loads.
-
-<img src="docs/screenshots/splash.png" alt="The animated startup splash with the SongBookMuse mark" width="240">
-
 ## Run on Windows
 
 Double-click [Run-SongBookMuse.bat](Run-SongBookMuse.bat). It opens an existing build or builds the app on first launch.
