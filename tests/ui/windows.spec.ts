@@ -889,3 +889,22 @@ test("exports a backup and replaces the library only after saving a safety backu
   await expect(page.getByRole("button", { name: "Backup keeper", exact: false }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "Added after export", exact: false })).toHaveCount(0);
 });
+
+test("draws its own window controls and blocks the browser context menu", async () => {
+  const controls = page.getByRole("group", { name: "Window" });
+  await expect(controls.getByRole("button", { name: "Minimize" })).toBeVisible();
+  await expect(controls.getByRole("button", { name: "Close" })).toBeVisible();
+  const maximize = controls.getByRole("button", { name: /^(Maximize|Restore)$/ });
+  const before = await maximize.getAttribute("aria-label");
+  await maximize.click();
+  await expect(maximize).not.toHaveAttribute("aria-label", before!);
+  await maximize.click();
+  await expect(maximize).toHaveAttribute("aria-label", before!);
+
+  const blocked = await page.evaluate(() => {
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
+    document.querySelector(".lcd")!.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+  expect(blocked).toBe(true);
+});

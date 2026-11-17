@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } f
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { WindowControls, dragWindow } from "./WindowControls";
 import {
   BookOpen, ChevronLeft, Columns2, Download, Maximize2, Ellipsis, Eye, FolderUp, Guitar, ListMusic, Minimize, Music2, Pencil, Play,
   Printer, Radio, ScrollText, Settings2, SkipBack, SkipForward, SlidersHorizontal, Square, Star, StickyNote, Trash2, X
@@ -482,7 +483,7 @@ export function App() {
       if (file) void action(() => onPreview(file));
     }}/>
 
-    <header className="transport" aria-label="Transport">
+    <header className="transport" aria-label="Transport" onMouseDown={dragWindow}>
       <div className="brand"><img src="/muse.png" alt=""/><span>SongBook<b>Muse</b></span></div>
       <div className="transport-group transport-file">
         <button type="button" onClick={() => files.current?.click()} disabled={busy} title="Import chord sheets, PDFs or images">
@@ -512,6 +513,7 @@ export function App() {
         <IconButton label="Chromatic tuner" onClick={() => setDialog("tuner")}><Radio size={15}/></IconButton>
         <IconButton label="Settings" onClick={() => setDialog("settings")}><Settings2 size={16}/></IconButton>
       </div>
+      <WindowControls/>
     </header>
 
     <Browser mode={mode} setMode={setMode} search={search} setSearch={setSearch} songs={visible} hasSongs={catalog.length > 0}
