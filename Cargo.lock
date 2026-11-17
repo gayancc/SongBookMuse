@@ -2102,7 +2102,7 @@ dependencies = [
 
 [[package]]
 name = "muse-core"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "base64 0.22.1",
  "crc32fast",
@@ -3345,7 +3345,7 @@ dependencies = [
 
 [[package]]
 name = "songbook-muse"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "base64 0.22.1",
  "midir",
