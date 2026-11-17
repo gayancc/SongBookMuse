@@ -1,0 +1,66 @@
+name: Alpha release
+
+# Publish a GitHub release whose tag contains "alpha" (for example v0.2.0-alpha.1).
+# This builds the Windows installer and attaches it, with its SHA-256 checksum, to that release.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  windows-installer:
+    if: contains(github.event.release.tag_name, 'alpha')
+    runs-on: windows-latest
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Read version from tag
+        id: version
+        run: |
+          $version = $env:TAG -replace '^v', ''
+          if ($version -notmatch '^\d+\.\d+\.\d+-alpha(\.\d+)?$') {
+            throw "Tag '$env:TAG' must look like v1.2.3-alpha or v1.2.3-alpha.4"
+          }
+          @{ version = $version } | ConvertTo-Json | Set-Content -Encoding utf8 release.conf.json
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: npm ci
+
+      - name: Test core library
+        run: cargo test --locked -p muse-core
+
+      - name: Build installer
+        run: npm run tauri -- build --bundles nsis --config release.conf.json
+
+      - name: Attach installer to release
+        run: |
+          $setup = Get-ChildItem target/release/bundle/nsis -Filter '*-setup.exe' | Select-Object -First 1
+          if (-not $setup) { throw 'No NSIS installer was produced' }
+          $name = "SongBookMuse_${{ steps.version.outputs.version }}_x64-setup.exe"
+          Copy-Item $setup.FullName $name
+          $hash = (Get-FileHash $name -Algorithm SHA256).Hash.ToLower()
+          "$hash  $name" | Set-Content -Encoding ascii "$name.sha256"
+          gh release upload $env:TAG $name "$name.sha256" --clobber
