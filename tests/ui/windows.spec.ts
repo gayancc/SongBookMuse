@@ -548,12 +548,93 @@ test("drags a setlist item past several positions and keeps the new order", asyn
   const entries = page.locator(".set-entry");
   const names = entries.locator(".entry-title");
   await expect(names).toHaveText(["First note", "Second note", "Third note"]);
-  await entries.nth(0).locator(".set-entry-handle").dragTo(entries.nth(2));
+  // Lift the first row, show the insertion bar above and then below the last row, and drop it there.
+  const handle = await entries.nth(0).locator(".set-entry-handle").boundingBox();
+  const last = await entries.nth(2).boundingBox();
+  if (!handle || !last) throw new Error("Setlist rows are not laid out");
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(last.x + 40, last.y + last.height * 0.25, { steps: 8 });
+  await expect(entries.nth(0)).toHaveAttribute("data-dragging", "true");
+  await expect(entries.nth(2)).toHaveAttribute("data-drop", "before");
+  await page.mouse.move(last.x + 40, last.y + last.height * 0.75, { steps: 4 });
+  await expect(entries.nth(2)).toHaveAttribute("data-drop", "after");
+  await page.mouse.up();
   await expect(names).toHaveText(["Second note", "Third note", "First note"]);
+  await expect(page.locator(".set-entry[data-drop], .set-entry[data-dragging]")).toHaveCount(0);
   await page.reload();
   await page.getByRole("button", { name: "Setlists", exact: true }).click();
   await set.click();
   await expect(names).toHaveText(["Second note", "Third note", "First note"]);
+});
+
+test("sends a song to a setlist from its right-click menu and checks several songs in the Songs list to add them", async () => {
+  await page.getByRole("button", { name: "Songs", exact: true }).click();
+  for (const title of ["Picker Alpha", "Picker Bravo", "Picker Charlie"]) {
+    await page.getByRole("button", { name: "New song" }).click();
+    const editor = page.getByRole("dialog", { name: "New song" });
+    await editor.getByLabel("Title", { exact: true }).fill(title);
+    await editor.getByRole("button", { name: "Save song" }).click();
+    await expect(editor).toHaveCount(0);
+  }
+  await page.getByRole("button", { name: "Setlists", exact: true }).click();
+  await page.getByRole("button", { name: "New setlist" }).click();
+  await page.getByLabel("Name", { exact: true }).fill("Send target");
+  await page.getByRole("button", { name: "Save setlist" }).click();
+
+  await page.getByRole("button", { name: "Songs", exact: true }).click();
+  await page.getByRole("button", { name: /Picker Bravo/ }).click({ button: "right" });
+  const menu = page.getByRole("menu").first();
+  await expect(menu).toBeVisible();
+  await menu.getByRole("menuitem", { name: "Send to setlist" }).hover();
+  await page.getByRole("menuitem", { name: "Send target" }).click();
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(page.getByText("Picker Bravo added to Send target")).toBeVisible();
+  // Escape dismisses the menu without sending anything.
+  await page.getByRole("button", { name: /Picker Alpha/ }).click({ button: "right" });
+  await expect(page.getByRole("menu")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Setlists", exact: true }).click();
+  const set = page.getByRole("button", { name: /Send target/ });
+  if (await set.getAttribute("aria-expanded") !== "true") await set.click();
+  const names = page.locator(".set-entry .entry-title");
+  await expect(names).toHaveText(["Picker Bravo"]);
+  // Add songs turns the Songs list itself into a checkbox list for this setlist.
+  await page.getByRole("button", { name: "Add songs" }).click();
+  await expect(page.getByRole("button", { name: "Songs", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("searchbox", { name: "Search songs" }).fill("picker");
+  const box = (title: string) => page.getByRole("checkbox", { name: new RegExp(title) });
+  await expect(page.getByRole("checkbox", { name: /Picker/ })).toHaveCount(3);
+  await expect(box("Picker Bravo")).toContainText("In set");
+  await box("Picker Alpha").click();
+  await box("Picker Charlie").click({ modifiers: ["Shift"] });
+  await expect(page.getByRole("checkbox", { name: /Picker/, checked: true })).toHaveCount(3);
+  await box("Picker Bravo").click();
+  await expect(page.getByText("2 selected")).toBeVisible();
+  await page.getByRole("button", { name: "Add 2 songs" }).click();
+  await expect(page.getByRole("toolbar", { name: "Song selection" })).toHaveCount(0);
+  await expect(names).toHaveText(["Picker Bravo", "Picker Alpha", "Picker Charlie"]);
+  await expect(page.getByText("2 songs added to Send target")).toBeVisible();
+
+  // Select songs from a right-click starts the same checkbox mode; Send to setlist asks which setlist.
+  await page.getByRole("button", { name: "Songs", exact: true }).click();
+  await page.getByRole("searchbox", { name: "Search songs" }).fill("picker");
+  await page.getByRole("button", { name: /Picker Charlie/ }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Select songs" }).click();
+  await box("Picker Alpha").click();
+  await page.getByRole("button", { name: "Send to setlist..." }).click();
+  await page.getByRole("menuitem", { name: "Send target" }).click();
+  await expect(names).toHaveText(["Picker Bravo", "Picker Alpha", "Picker Charlie", "Picker Alpha", "Picker Charlie"]);
+  // Escape leaves checkbox mode without adding anything.
+  await page.getByRole("button", { name: "Songs", exact: true }).click();
+  await page.getByRole("button", { name: /Picker Alpha/ }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Select songs" }).click();
+  await expect(page.getByRole("toolbar", { name: "Song selection" })).toBeVisible();
+  await page.getByRole("checkbox", { name: /Picker Alpha/ }).focus();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("toolbar", { name: "Song selection" })).toHaveCount(0);
 });
 
 test("keeps a section arrangement local to one occurrence of a song", async () => {

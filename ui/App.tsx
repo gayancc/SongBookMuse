@@ -8,7 +8,7 @@ import {
   Printer, Radio, ScrollText, Settings2, SkipBack, SkipForward, SlidersHorizontal, Square, Star, StickyNote, Trash2, X
 } from "lucide-react";
 import { BackingTrack } from "./BackingTrack";
-import { Browser, type LibraryFilter } from "./Browser";
+import { Browser, type LibraryFilter, type SongSelection } from "./Browser";
 import { Chart, FitChart, type FitLayout } from "./Chart";
 import { ChordStrip, useDiagrams, useSongChords } from "./ChordDiagram";
 import { decode, encode, exportFile, safeName } from "./commands";
@@ -28,6 +28,7 @@ import {
 import { pedalKey } from "./PedalSettings";
 import { Prompt } from "./Prompt";
 import { SetEditor } from "./SetEditor";
+import { ContextMenu, type MenuItem } from "./ContextMenu";
 import { SongEditor } from "./SongEditor";
 import { Tuner } from "./Tuner";
 import { useAutoScroll } from "./useAutoScroll";
@@ -100,6 +101,9 @@ export function App() {
   const [loaded, setLoaded] = useState(false);
   const [menu, setMenu] = useState(false);
   const [printSet, setPrintSet] = useState(false);
+  const [popup, setPopup] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
+  const [selecting, setSelecting] = useState<{ target: string | null; picked: ReadonlySet<string> } | null>(null);
+  const closePopup = useCallback(() => setPopup(null), []);
   const files = useRef<HTMLInputElement>(null);
   const backup = useRef<HTMLInputElement>(null);
   const scroll = useRef<HTMLDivElement>(null);
@@ -275,7 +279,8 @@ export function App() {
         if (!event.repeat) runNavigationAction(settings.keyboard_pedals[key]);
         return;
       }
-      if (event.key === "Escape" && perform) togglePerformance();
+      if (event.key === "Escape" && selecting) setSelecting(null);
+      else if (event.key === "Escape" && perform) togglePerformance();
       else if (event.key === "ArrowLeft" || event.key === "ArrowRight") navigate(event.key === "ArrowLeft" ? -1 : 1);
       else if ((event.key === "PageUp" || event.key === "PageDown" || (event.key === " " && !onButton)) && (song || noteItem)) {
         event.preventDefault();
@@ -284,7 +289,7 @@ export function App() {
     }
     window.addEventListener("keydown", handle);
     return () => window.removeEventListener("keydown", handle);
-  }, [navigate, perform, song, noteItem, stepPage, togglePerformance, autoScroll, settings.keyboard_pedals, runNavigationAction]);
+  }, [navigate, perform, selecting, song, noteItem, stepPage, togglePerformance, autoScroll, settings.keyboard_pedals, runNavigationAction]);
 
   const lookup = useMemo(() => new Map(catalog.map(item => [item.id, item])), [catalog]);
   const visible = useMemo(() => {
@@ -308,6 +313,57 @@ export function App() {
     const saved = await invoke<Setlist>("save_set", { set: next });
     await refresh();
     return saved;
+  }
+
+  /** Appends songs to the end of a setlist, reading the latest copy so concurrent edits are kept. */
+  async function sendToSet(target: Setlist, ids: string[]) {
+    const latest = sets.find(s => s.id === target.id) ?? target;
+    await writeSet({ ...latest, entries: [...latest.entries, ...ids.map(nilEntry)] });
+    const what = ids.length === 1 ? lookup.get(ids[0])?.title ?? "Song" : ids.length + " songs";
+    setNotice(what + " added to " + latest.title);
+  }
+
+  const songSelection: SongSelection | null = selecting && {
+    target: sets.find(s => s.id === selecting.target) ?? null, picked: selecting.picked,
+  };
+
+  /** Checked songs in the order the list shows them, then any checked songs the current filter hides. */
+  function pickedInOrder(picked: ReadonlySet<string>): string[] {
+    const shown = visible.filter(s => picked.has(s.id)).map(s => s.id);
+    return shown.concat(catalog.filter(s => picked.has(s.id) && !shown.includes(s.id)).map(s => s.id));
+  }
+
+  /** Adds the checked songs, then shows the setlist they went into. */
+  async function finishSelection(target: Setlist, ids: string[]) {
+    await sendToSet(target, ids);
+    setSelecting(null);
+    setMode("sets"); setSearch(""); setSetId(target.id); setEntryId(null);
+  }
+
+  function setlistItems(ids: string[]): MenuItem[] {
+    const ordered = [...sets].sort((a, b) => Number(b.pinned) - Number(a.pinned));
+    return ordered.length
+      ? ordered.map(set => ({ label: set.title, run: () => void action(() => selecting ? finishSelection(set, ids) : sendToSet(set, ids)) }))
+      : [{ label: "No setlists yet", disabled: true }];
+  }
+
+  function songMenuItems(item: SongSummary): MenuItem[] {
+    if (selecting) {
+      const ids = pickedInOrder(selecting.picked.has(item.id) ? selecting.picked : new Set([...selecting.picked, item.id]));
+      const what = ids.length === 1 ? "song" : ids.length + " songs";
+      return [
+        { label: "Send " + what + " to setlist", items: setlistItems(ids) },
+        { kind: "separator" },
+        { label: "Cancel selection", run: () => setSelecting(null) },
+      ];
+    }
+    return [
+      { label: "Open", run: () => void action(() => changeSong(item.id)) },
+      { label: "Select songs", run: () => setSelecting({ target: null, picked: new Set([item.id]) }) },
+      { kind: "separator" },
+      { label: "Send to setlist", items: setlistItems([item.id]) },
+      { label: "New setlist with this song...", run: () => setEditingSet({ ...blankSet(), entries: [nilEntry(item.id)] }) },
+    ];
   }
 
   async function modifyPitch(property: "transpose" | "capo", value: number) {
@@ -547,7 +603,7 @@ export function App() {
       <WindowControls/>
     </header>
 
-    <Browser mode={mode} setMode={setMode} search={search} setSearch={setSearch} songs={visible} hasSongs={catalog.length > 0}
+    <Browser mode={mode} setMode={next => { if (next === "sets") setSelecting(null); setMode(next); }} search={search} setSearch={setSearch} songs={visible} hasSongs={catalog.length > 0}
       loaded={loaded} busy={busy} folders={folders} filter={filter} setFilter={setFilter} sort={sort} setSort={setSort}
       activeSong={entry ? null : song?.id ?? null} openSong={id => void action(() => changeSong(id))}
       newSong={() => setEditing(blankSong())} newFolder={() => setPrompt({ kind: "new-folder" })}
@@ -564,6 +620,17 @@ export function App() {
       })}
       addNote={() => setPrompt({ kind: "note", entry: null })}
       shuffle={set => void action(async () => { await writeSet({ ...set, entries: shuffled(set.entries) }); setNotice("Shuffled " + set.title); })}
+      addSongs={set => { setSelecting({ target: set.id, picked: new Set() }); setMode("songs"); setSearch(""); }}
+      songMenu={(item, x, y) => setPopup({ x, y, items: songMenuItems(item) })}
+      selection={songSelection}
+      setPicked={picked => setSelecting(current => current && { ...current, picked })}
+      cancelSelection={() => setSelecting(null)}
+      commitSelection={(x, y) => {
+        if (!songSelection) return;
+        const ids = pickedInOrder(songSelection.picked);
+        if (songSelection.target) { const target = songSelection.target; void action(() => finishSelection(target, ids)); }
+        else setPopup({ x, y, items: setlistItems(ids) });
+      }}
       dropFiles={selected => void action(() => importFiles(selected))}/>
 
     <main className="workspace">
@@ -703,6 +770,7 @@ export function App() {
         setNotice("Added to " + set.title); setDialog(null);
       })}><ListMusic size={16}/>{set.title}</button>)}</div>
     </Modal>}
+    {popup && <ContextMenu x={popup.x} y={popup.y} items={popup.items} close={closePopup}/>}
     {dialog === "delete-song" && song && <Modal title="Delete song?" close={() => setDialog(null)}>
       <p>{song.title} will be removed from your library and all setlists.</p>
       <footer><button onClick={() => setDialog(null)}>Cancel</button><button className="danger" onClick={() => void action(async () => {

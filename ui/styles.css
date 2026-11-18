@@ -24,6 +24,8 @@ h1, h2, h3, p { margin: 0; }
   --verse: #5f93d8; --chorus: #e88a3a; --bridge: #a77ad8; --intro: #4fb89a; --tab: #8a969f;
   --alert: #ff8f7d; --danger: #b23a2e; --ok: #8fd16a;
   --radius: 3px;
+  --popup-bg: #bbc3c8; --popup-frame: #151e23; --popup-fg: #10171b; --popup-disabled: #8a959c;
+  --popup-select: #5d6b74; --popup-select-fg: #fff; --popup-rule: #919ca4; --popup-heading: #929da4; --popup-heading-fg: #e3e7ea;
   color-scheme: dark; color: var(--fg); background: var(--ground); font-size: 13px;
   display: grid; height: 100dvh;
   grid-template: "transport transport" 52px "browser workspace" minmax(0,1fr) "hint hint" 24px / 288px minmax(0,1fr);
@@ -44,6 +46,8 @@ h1, h2, h3, p { margin: 0; }
   --lcd-bg: #000; --lcd-fg: #ffd400; --lcd-dim: #806a00;
   --paper: #000; --ink-text: #fff; --ink-soft: #f0f0f0; --chord: #ffd400;
   --verse: #6fb2ff; --chorus: #ffb000; --bridge: #d39bff; --intro: #5fe0b8; --tab: #ccc;
+  --popup-bg: #000; --popup-frame: #fff; --popup-fg: #fff; --popup-disabled: #9a9a9a;
+  --popup-select: #ffd400; --popup-select-fg: #000; --popup-rule: #fff; --popup-heading: #333; --popup-heading-fg: #fff;
 }
 
 /* ---------- controls ---------- */
@@ -229,6 +233,24 @@ button.key-readout:hover:not(:disabled), button.key-readout:focus-visible, butto
 .set-entry-handle { display: inline-flex; flex: none; color: var(--soft); cursor: grab; }
 .set-entry-handle:active { cursor: grabbing; }
 @media (pointer: coarse) { .set-entry-handle { display: none; } }
+/* Drag-to-reorder: the lifted row dims, an accent insertion bar marks where it will land. */
+.set-entry { position: relative; }
+.set-entry[draggable="true"] > button:first-child { cursor: grab; }
+.set-entries[data-dragging="true"] .set-entry > button:first-child { cursor: grabbing; }
+.set-entries[data-dragging="true"] .set-entry > button:first-child:hover:not(:disabled) { background: transparent; }
+.set-entry[data-dragging="true"] { opacity: .38; background: var(--ground); box-shadow: inset 0 1px 3px #0008; }
+.set-entry[data-drop]::before {
+  content: ""; position: absolute; z-index: 2; left: 4px; right: 4px; height: 2px; pointer-events: none;
+  background: var(--accent-hi); box-shadow: 0 0 6px color-mix(in srgb, var(--accent), transparent 30%);
+}
+.set-entry[data-drop]::after {
+  content: ""; position: absolute; z-index: 2; left: 0; width: 0; height: 0; pointer-events: none;
+  border: 5px solid transparent; border-left-color: var(--accent-hi);
+}
+.set-entry[data-drop="before"]::before { top: -1px; }
+.set-entry[data-drop="before"]::after { top: -5px; }
+.set-entry[data-drop="after"]::before { bottom: -1px; }
+.set-entry[data-drop="after"]::after { bottom: -5px; }
 .set-entry .entry-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .set-entry[data-note="true"] .entry-title { font-style: italic; color: var(--soft); }
 .step-index { min-width: 22px; height: 18px; display: inline-grid; place-items: center; border-radius: 2px; font-size: 10.5px; font-weight: 700; color: var(--on-accent); background: color-mix(in srgb, var(--accent), var(--chassis) 30%); font-variant-numeric: tabular-nums; }
@@ -246,6 +268,39 @@ button.key-readout:hover:not(:disabled), button.key-readout:focus-visible, butto
 .menu button, .set-picker button { width: 100%; justify-content: flex-start; background: transparent; border-color: transparent; box-shadow: none; }
 .menu button:hover:not(:disabled), .set-picker button:hover { background: var(--selection); color: var(--accent-hi); }
 .set-picker { display: grid; gap: 2px; }
+/* Right-click menu, matched to FL Studio's popup menus (sampled from FL Studio 2025):
+   flat light panel, 1px dark frame, square corners, slate selection bar, grey heading bars, no icons. */
+.context-menu-layer { position: fixed; inset: 0; z-index: 40; pointer-events: none; }
+.popup-menu {
+  position: fixed; pointer-events: auto; display: flex; flex-direction: column; min-width: 170px; max-width: 320px;
+  max-height: 100dvh; overflow-y: auto; padding: 1px; outline: none;
+  background: var(--popup-bg); border: 1px solid var(--popup-frame); border-radius: 0; color: var(--popup-fg);
+  font-size: 12px; line-height: 1; user-select: none;
+}
+.popup-menu > button {
+  display: flex; align-items: center; justify-content: flex-start; gap: 0; width: 100%; min-height: 19px; height: 19px;
+  padding: 0 6px 0 22px; border: 0; border-radius: 0; background: transparent; box-shadow: none;
+  color: inherit; font: inherit; font-weight: 400; text-align: left; cursor: default;
+}
+.popup-menu > button:hover:not(:disabled), .popup-menu > button:active:not(:disabled) { background: transparent; box-shadow: none; }
+.popup-menu > button:focus, .popup-menu > button:focus-visible { outline: none; }
+.popup-menu > button:focus:not(:disabled), .popup-menu > button[aria-expanded="true"] { background: var(--popup-select); color: var(--popup-select-fg); }
+.popup-menu > button:disabled { color: var(--popup-disabled); opacity: 1; }
+.popup-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 16px; }
+.popup-arrow { flex: none; width: 5px; height: 5px; margin-right: 2px; border-top: 1px solid currentColor; border-right: 1px solid currentColor; transform: rotate(45deg); }
+.popup-separator { flex: none; height: 1px; margin: 4px 0 4px 2px; background: var(--popup-rule); }
+.popup-heading { flex: none; height: 15px; display: flex; align-items: center; padding: 0 4px; background: var(--popup-heading); color: var(--popup-heading-fg); font-size: 10.5px; }
+/* Checkbox mode of the Songs list, used to send several songs to a setlist. */
+.row-check { flex: none; width: 15px; height: 15px; display: grid; place-items: center; background: var(--ground); border: 1px solid var(--edge); border-radius: 2px; color: var(--accent-hi); box-shadow: inset 0 1px 2px #0008; }
+.song-row[data-checked="true"] { background: linear-gradient(90deg, var(--selection), color-mix(in srgb, var(--selection), transparent 70%)); }
+.song-row[data-checked="true"] .row-text strong { color: var(--accent-hi); }
+.row-in-set { flex: none; font-size: 10.5px; color: var(--quiet); white-space: nowrap; }
+.selection-bar { display: grid; gap: 5px; padding: 5px 6px 6px; border-top: 1px solid var(--edge); background: var(--chassis); }
+.selection-info { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 11px; color: var(--soft); font-variant-numeric: tabular-nums; }
+.selection-all { flex: none; flex-direction: row; align-items: center; gap: 6px; font-size: 11px; color: var(--fg); white-space: nowrap; }
+.selection-target { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--quiet); }
+.selection-actions { display: flex; justify-content: flex-end; gap: 4px; }
+.selection-actions button { flex: none; min-height: 24px; padding: 2px 10px; font-size: 12px; }
 .sheet-scroll { --sheet-padding: clamp(10px, 2.4vw, 28px); flex: 1; overflow: auto; padding: var(--sheet-padding); overscroll-behavior: contain; }
 .sheet-scroll[data-overscroll="true"] { container-type: size; }
 .sheet-scroll[data-overscroll="true"]::after { content: ""; display: block; height: calc(50cqh + var(--sheet-padding)); }
